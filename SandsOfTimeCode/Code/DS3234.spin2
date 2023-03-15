@@ -1,0 +1,78 @@
+{DS3234 RTC Clock Library}
+
+CON
+  SS = 16     ' SPI Chip/Slave Select
+  MOSI = 17   ' SPI Master Out / Slave In
+  MISO = 18   ' SPI Master In / Slave Out
+  SCLK = 19   ' SPI Clock
+  SQW = -1    ' Optional Square Wave Interrupt Pin
+
+  ' Chip register addresses
+  #0, sec_r, min_r, hr_r, day_r, date_r, mo_cent_r, yr_r
+  ' Add in Alarm and other things
+
+  ' MSB determines read or write (0 - Read, 1 - Write)
+  ' Are these actually necessary? 
+  #$80, sec_w, min_w, hr_w, day_w, date_w, mo_cent_w, yr_w
+  ' Add in Alarm and other things
+  
+var
+  byte hour, minute, second, day, date, month, year
+  byte time[7]
+
+
+pub InitClock()
+  dira[CCS]~~  
+  dira[CSI]~   
+  dira[CSO]~~  
+  dira[CCLK]~~
+  outa[CCS]~~
+
+  repeat
+    SPIRead()
+
+
+' Basically just writing the address byte
+pub SelectRegister(reg)
+  repeat i from 0 to 7       
+    outa.[SCLK]~~
+    outa.[MOSI]:= reg>>i | 1 'Little Endian or Big Endian
+    outa.[SCLK]~
+
+{{Read value via SPI }}
+pri SPIRead(read) | i
+  outa.[SS]~
+  repeat i from 0 to 6
+    repeat 8
+      outa.[SCLK]~~ 
+      time[i]:=time[i]<<1+ina.[MISO]
+      outa.[SCLK]~  
+  outa.[SS]~~
+
+{{Write value via SPI}}
+pri SPIWrite(value) | i
+  ' Do I need to ensure chip select is low?
+  outa.[SS]~
+  repeat i from 0 to 7       
+    outa.[SCLK]~~
+    outa.[MOSI]:= value>>i | 1 'Little Endian or Big Endian
+    outa.[SCLK]~  
+
+
+pub GetHours()
+pub GetMinutes()
+pub GetSeconds()
+
+pub SetDateAndTime(hour, minute, second, date, month, year)
+
+
+pub Set12Hour()
+
+pub Set24Hour()
+
+' Decimal to Binary-Coded Decimal
+pub DECtoBCD()
+  
+
+' Binary-Coded Decimal to Decimal
+pub BCDtoDEC()

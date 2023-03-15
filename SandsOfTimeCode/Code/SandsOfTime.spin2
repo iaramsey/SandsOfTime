@@ -1,0 +1,67 @@
+{Object_Title_and_Purpose}
+
+
+con
+  _clkfreq = 300_000_000
+  {Encoder Constants}  
+  CLK = 0
+  DATA = 1
+  CS0 = 2    ' Start of encoder chip select pin range
+  CSf = 15   ' End of encoder chip select pin range
+  NumEnc = CSf - CS0
+  {Motor Constants}
+
+  {LED Constants}
+
+  {RTC Clock Constants}
+  SS = 16     ' SPI Chip/Slave Select
+  MOSI = 17   ' SPI Master Out / Slave In
+  MISO = 18   ' SPI Master In / Slave Out
+  SCLK = 19   ' SPI Clock
+  SQW = -1    ' Optional Square Wave Interrupt Pin
+
+var
+  word EncPos[NumEnc]
+  long Stack2[100], Stack3[100] ' TODO: Figure out optimal number for this
+  word hour, minute, second, day, date, month, year
+
+obj
+
+  ' TODO: Find the spin2 versions of these
+  rgb : "WS2812B_RGB_LED_Driver"
+  lcd : "serial_LCD"
+
+pub Main()
+  cogspin(2, ReadAbsEncoders, @Stack2) ' Process reading absolute encoders
+  cogspin(3, ReadQuadEncoders, @Stack3) ' Process reading quadrature encoders
+  cogspin(4, , @Stack4) 
+
+
+
+
+pub ReadAbsEncoders() | i, value
+  dira.[CLK]~~  ' Output
+  dira.[DATA]~  ' Input
+  dira.[CS0..CSf]~~
+  outa.[CS0..CSf]~~
+  repeat
+    repeat i from CS0 to CSf
+      outa.[i]~
+      value:=0
+      repeat 16   ' Read 16 bits (top 10 are position)
+        outa.[CLK]~~
+        value := (value << 1) | ina.[DATA]
+        outa.[CLK]~
+      EncPos[i] := value >> 6
+      outa[i]~~
+
+
+pub ReadQuadEncoders()
+
+pub ReadLimitSwitches()
+
+pub RotateArm(position)
+
+pub ExtendArm(length)
+
+

@@ -1,0 +1,47 @@
+State of the Clock - July 25, 2019
+
+Mechanical 
+
+- Polish gear teeth to hopefully fix the high pitch noise when rotating
+- Permanently attach the brass counterweight to the arm; epoxy?
+- Epoxy the mirrored rotunda panels to the wooden frame
+- Figure out a way to mount the LCD panel so that it can be accessed but isn't in the way
+- Put a cover on the arm to prevent people from getting fingers stuck
+
+Software
+
+- Account for the travel time of the arm in deciding when to start the rotation for more accurate timekeeping
+	- Experiment with all of the hourglasses to figure out how long each travel time is 
+	and create a massive lookup table to select the time to leave 
+	- Definitely seems like more trouble than it is worth
+- Prevent LED disk from going red before switching to the minute animation during extension
+	- A global boolean to flag when the arm is extending
+	- if Extending == False and HG <> (MinuteHG + 1)
+		setSection(Start, End, rgb.Intenstiy(rgb#red,50))
+	- if Extending == False and HG <> (DecimalMinute / 5)
+		setSection(Start, End, rgb.Intenstiy(rgb#red,50))
+	- Basically figure out if the arm is extending and figure out which HG it is extending towards to 
+	prevent it from turing the LED disk red
+- LED Night Mode
+	- I think it would be nice to turn of the lights at night, both to prolong the life of the LEDs and to lessen the impact of the clock in a dark hallway
+		- There is a boolean in place in the DecideLED method as of now, just need to tweak how it is assigned; right now it is after 8 pm and before 8 am,
+		but it is only dependent on one reading of the AM/PM bit, which can be know to randomly flip momentarily, so there likely needs to be a system that 
+		checks the AM/PM state over a longer period of time (i.e. if it has been AM for 5 seconds, could do this with an iterating counter)
+- Lightshows
+	- Better, different, or more patterns in the lightshow
+	- Different lightshows every 15 minutes
+	- Change lightshow back to only at top of the hour?
+- Random red flashes
+	- Could be encoders misreading (slow down the sampling rate?)
+	- Loose wires?
+
+Electrical
+
+- Purchase and implement PCB; a "finished" design is in the PCB folder titled "Clock Schematic v.8_no_jumpers"
+	- Probably needs improvement from someone who actually knows what they are doing (i.e. not me)
+- Hopefully this will fix the burning out of the limit switch pin 
+- Clean up/shorten wires 
+- Right now there is a 5A fuse on the 5V supply
+	- There were a few times this summer where it randomly blew; I just replaced it and it was fine; no working theories on why this is happening
+	- When programming sometimes all the LEDS go white which will blow the fuse, I think temporarily unplugging the power/data to the 12 o'clock ring should fix it
+	- Overall, the best answer is to probably put a higher amp fuse
