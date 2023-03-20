@@ -12,10 +12,11 @@ CON
   ' Add in Alarm and other things
 
   ' MSB determines read or write (0 - Read, 1 - Write)
+
   ' Are these actually necessary? 
   #$80, sec_w, min_w, hr_w, day_w, date_w, mo_cent_w, yr_w
   ' Add in Alarm and other things
-  
+
 var
   byte hour, minute, second, day, date, month, year
   byte time[7]
@@ -60,19 +61,21 @@ pri SPIWrite(value) | i
 
 
 pub GetHours()
+
 pub GetMinutes()
 pub GetSeconds()
 
 pub SetDateAndTime(hour, minute, second, date, month, year)
 
 
-pub Set12Hour()
+pub Set12Hour(j)
 
 pub Set24Hour()
 
 ' Decimal to Binary-Coded Decimal
-pub DECtoBCD()
+pub DECtoBCD(dec)
+  dec.
   
 
 ' Binary-Coded Decimal to Decimal
-pub BCDtoDEC()
+pub BCDtoDEC(bcd)

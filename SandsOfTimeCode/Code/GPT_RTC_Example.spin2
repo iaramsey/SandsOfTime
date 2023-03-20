@@ -1,0 +1,21 @@
+CON
+  _clkfreq = 200_000_000
+
+OBJ
+  rtc : "DS3234_RTC_SPI"
+
+PUB start | time
+  
+  ' Initialize the DS3234 RTC object
+  rtc.start(15, 14, 13)
+  
+  repeat
+    ' Read the current time from the RTC
+    time := rtc.get_time()
+    
+    ' Output the time to the serial terminal
+    serial.str(string(time.hour, ":", time.min, ":", time.sec, " - ", time.mon, "/", time.mday, "/", time.year + 1900, "\n"))
+    
+    ' Wait for 1 second before reading the time again
+    waitcnt(_clkfreq + cnt)
+  forever

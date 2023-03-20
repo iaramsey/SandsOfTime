@@ -1,4 +1,0 @@
-(sym_lib_table
-  (version 0)
-  (lib (name "SandsOfTimePCB-eagle-import")(type "KiCad")(uri "${KIPRJMOD}/SandsOfTimePCB-eagle-import.kicad_sym")(options "")(descr ""))
-)
