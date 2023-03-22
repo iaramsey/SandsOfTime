@@ -1,0 +1,66 @@
+{BTS7960 H-Bridge Library}
+
+
+CON
+  _clkfreq = 300_000_000
+  
+  ' Pin assignments
+  RPWM = 1  ' Forward Level or PWM signal, Active High
+  LPWM = 2  ' Reverse Level or PWM signal, Active High
+  R_EN = 3  ' Forward Drive Enable Input, Active High/ Low Disable
+  L_EN = 4  ' Reverse Drive Enable Input, Active High/Low Disable
+  R_IS = 5  ' Forward Drive, Side current alarm output
+  L_IS = 6  ' Reverse Drive, Side current alarm output
+
+  Q_ENC_A = 7
+  Q_ENC_B = 8
+
+VAR
+  long clockPulses, basePeriods
+
+pub InitPins(numClockPulses, numBasePeriods) | x 
+  x.word[0] := numClockPulses     'Set base period's # of clock pulses 10*3.33ns=33ns
+  x.word[1] := numBasePeriods   'Set PMW frame period to be made up of 1000 base periods
+  clockPulses := numClockPulses
+  basePeriods := numBasePeriods
+  pinstart(RPWM, p_oe+p_pwm_triangle, x, 0)    'Start forward sawtooth PWM smartpin mode
+  pinstart(LPWM, p_oe+p_pwm_triangle, x, 0)    'Start reverse sawtooth PWM smartpin mode
+  
+  dira.[R_EN]~~
+  outa.[R_EN]~
+  dira.[L_EN]~~
+  outa.[L_EN]~
+
+  dira.[R_IS]~
+  dira.[L_IS]~
+
+{{Drive motor forward with speed 0-numBasePeriods}}
+pub Drive(speed) ' Direction determined by sign of number (2s complement)
+  outa.[(speed >> 31 & 1) ? L_EN : R_EN] := 1
+  wypin((speed >> 31 & 1) ? LPWM : RPWM, 0#>speed<#numBasePeriods)
+
+pub Drive(speed, direction) ' any value other than 0 drives backwards
+  if direction
+    outa.[L_EN] := 1
+    wypin(LPWM, 0#>speed<#numBasePeriods) 
+  else
+    outa.[R_EN] := 1
+    wypin(RPWM, 0#>speed<#numBasePeriods)
+    
+pub DriveForward(speed)
+  outa.[R_EN] := 1
+  wypin(RPWM, 0#>speed<#numBasePeriods) ' TODO: Maybe incorporate a minimum duty cycle
+
+pub DriveBackward(speed)
+  outa.[L_EN] := 1
+  wypin(LPWM, 0#>speed<#numBasePeriods)
+
+{{Disable motor and set PWM to 0% duty cycle}}
+pub Stop()
+  ' Disable
+  outa.[R_EN]:=0
+  outa.[L_EN]:=0
+
+  ' Turn off PWM
+  wypin(RPWM, 0)
+  wypin(LPWM, 0)

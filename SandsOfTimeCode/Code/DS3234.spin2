@@ -1,81 +1,132 @@
 {DS3234 RTC Clock Library}
 
 CON
-  SS = 16     ' SPI Chip/Slave Select
-  MOSI = 17   ' SPI Master Out / Slave In
-  MISO = 18   ' SPI Master In / Slave Out
-  SCLK = 19   ' SPI Clock
+  _clkfreq = 300_000_000
+  SS = 11     ' SPI Chip/Slave Select
+  MOSI = 12   ' SPI Master Out / Slave In
+  MISO = 13   ' SPI Master In / Slave Out
+  SCLK = 14   ' SPI Clock
   SQW = -1    ' Optional Square Wave Interrupt Pin
 
   ' Chip register addresses
   #0, sec_r, min_r, hr_r, day_r, date_r, mo_cent_r, yr_r
-  ' Add in Alarm and other things
 
   ' MSB determines read or write (0 - Read, 1 - Write)
 
-  ' Are these actually necessary? 
   #$80, sec_w, min_w, hr_w, day_w, date_w, mo_cent_w, yr_w
-  ' Add in Alarm and other things
+  ' TODO: Add in Alarm and other things
 
 var
   byte hour, minute, second, day, date, month, year
-  byte time[7]
+  byte time_raw[7]
+  long time_readable[7]
+
+obj
+pst : "pst_driver"
+
+' pub Main()
+'   InitClock()
+'   pst.start(115200)
+'                                                    '_seconds=$00       'X_654_3210
+'   '11:24:30AM 01/15/16                                                  ' *10m  __m
+'   time_raw[0]:=3<<4 + 0                                  '_minutes=$01       'X_654_3210
+'   time_raw[1]:=2<<4 + 4                                                     '   1/0   1/0  *10hr  hr
+'   time_raw[2]:=1<<6 + 0<<5 + 1<<4 + 1                    '_hour=$02          'X_12/24_PM/AM_4____3210
+'   time_raw[3]:=4                                                           '      day
+'   time_raw[4]:=1<<4 + 4                                  '_day=$03           'XXXXX_210
+'   time_raw[5]:=0<<7 + 0<<4 + 1                                             '   *10  date
+'   time_raw[6]:=1<<4 + 6
+'   SetTime()
+
+'   repeat
+'     GetTime()
+'     DisplayTime()
+'     waitms(1000)
+'     pst.ClearHome()
 
 
-pub InitClock()
-  dira[CCS]~~  
-  dira[CSI]~   
-  dira[CSO]~~  
-  dira[CCLK]~~
-  outa[CCS]~~
+'*** SPI Helper functions ***
 
-  repeat
-    SPIRead()
-
-
-' Basically just writing the address byte
-pub SelectRegister(reg)
-  repeat i from 0 to 7       
-    outa.[SCLK]~~
-    outa.[MOSI]:= reg>>i | 1 'Little Endian or Big Endian
-    outa.[SCLK]~
-
-{{Read value via SPI }}
-pri SPIRead(read) | i
+pri SPIStart() '
   outa.[SS]~
-  repeat i from 0 to 6
-    repeat 8
-      outa.[SCLK]~~ 
-      time[i]:=time[i]<<1+ina.[MISO]
-      outa.[SCLK]~  
+
+pri SPIEnd()
   outa.[SS]~~
 
-{{Write value via SPI}}
-pri SPIWrite(value) | i
-  ' Do I need to ensure chip select is low?
-  outa.[SS]~
-  repeat i from 0 to 7       
+{{Read 1 byte via SPI into variable left shifted in; x should be address}}
+pri SPIRead(x) | i
+  repeat 8
     outa.[SCLK]~~
-    outa.[MOSI]:= value>>i | 1 'Little Endian or Big Endian
-    outa.[SCLK]~  
+    byte[x] := byte[x]<<1 | ina.[MISO]  ' Sends MSB first
+    outa.[SCLK]~
 
 
-pub GetHours()
+{{Write 1 byte via SPI}}
+pri SPIWrite(value) | i
+  repeat i from 7 to 0
+    outa.[SCLK]~~
+    outa.[MOSI]:= value>>i & 1
+    outa.[SCLK]~
 
-pub GetMinutes()
-pub GetSeconds()
+'*** Clock Functions ***
 
-pub SetDateAndTime(hour, minute, second, date, month, year)
+pub InitClock()
+  dira.[SS]~~
+  dira.[MISO]~
+  dira.[MOSI]~~
+  dira.[SCLK]~~
+  outa.[SS]~~
+
+{{Gets raw time data from registers seconds through year $00-$06}}
+pub GetTime()  | i      ''Refresh time[0] through time[6] values
+  SPIStart()
+  SPIWrite(sec_r)
+  repeat i from 0 to 6
+    SPIRead(@time_raw[i])
+  SPIEnd()
+
+{{Set seconds through year registers ($00-$06) using raw data in time}}
+pub SetTime() | i
+  SPIStart()
+  SPIWrite(sec_w)
+  repeat i from 0 to 6
+    SPIWrite(time_raw[i])
+  SPIEnd()
+
+pub SetMode(is24hours)
+
+pub convertToReadable()
+  time_readable[0]:=(time_raw[0]>>4)*10 + (time_raw[0] & $0f)                       'seconds
+  time_readable[1]:=(time_raw[1]>>4)*10 + (time_raw[1] & $0f)                       'minutes
+  time_readable[2]:=(time_raw[2] & $10)*10 + (time_raw[2] & $0f)                    'hours TODO: Ignores AM/PM and potential 24 hours
+  time_readable[3]:=time_raw[3]                                                 'day of week
+  time_readable[4]:=(time_raw[4]>>4)*10 + (time_raw[4] & $0f)                       'date
+  time_readable[5]:=(time_raw[5] & $10)*10 + (time_raw[5] & $0f)                    'month
+  time_readable[6]:=(time_raw[5]>>7)*100 + (time_raw[6]>>4)*10 + (time_raw[6] & $0f)    'year
 
 
-pub Set12Hour(j)
-
-pub Set24Hour()
-
-' Decimal to Binary-Coded Decimal
-pub DECtoBCD(dec)
-  dec.
-  
-
-' Binary-Coded Decimal to Decimal
-pub BCDtoDEC(bcd)
+pub DisplayTime()
+  if (time_raw[2] & %1_0000)==%1_0000
+    pst.str(string("1"))       'hours tens place
+  else
+    pst.str(string(" "))
+  pst.dec(time_raw[2] & %1111)     'hours
+  pst.str(string(":"))
+  pst.dec((time_raw[1] & %111_0000)>>4) 'minutes tens place
+  pst.dec(time_raw[1] & %000_1111) 'minutes
+  pst.str(string(":"))
+  pst.dec((time_raw[0] & %111_0000)>>4) 'seconds tens place
+  pst.dec(time_raw[0] & %000_1111) 'seconds
+  if (time_raw[2] & %10_0000)==%10_0000
+    pst.str(string("PM"))       'hours tens place
+  else
+    pst.str(string("AM"))
+  pst.str(string("    "))
+  case time_raw[3]
+    0:pst.str(string("Sunday"))
+    1:pst.str(string("Monday"))
+    2:pst.str(string("Tuesday"))
+    3:pst.str(string("Wednesday"))
+    4:pst.str(string("Thursday"))
+    5:pst.str(string("Friday"))
+    6:pst.str(string("Saturday"))

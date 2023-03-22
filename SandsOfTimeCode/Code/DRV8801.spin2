@@ -1,0 +1,70 @@
+{DRV8801 Motor Driver Library}
+
+con
+  _clkfreq = 300_000_000
+  DIR = 0     ' Logic input for controlling motor direction.
+  PWM = 1     ' Logic input for enabling the driver outputs/controlling motor speed. A PWM signal can be applied to this pin.
+  BRAKE = 2   ' Logic input for controlling whether the driver brakes low or coasts when PWM pin is low. A logic high results in braking (slow-decay through ground).
+  SLEEP = 3   ' Logic input that puts the DRV8801 into a low-power sleep mode when low.
+  FAULT = 4   ' Logic output that drives low when a fault occurs. The carrier board pulls this pin up to VDD.
+  CS = 5      ' Analog voltage output proportional to motor current (500 mV per A). Note: this pin will output 0 V whenever the driver is in slow-decay mode (i.e., when BRAKE/MODE1 is HIGH).
+
+var
+  long clockPulses, basePeriods
+
+{{
+  Initialize all pins with correct direction and start PWM Smart Pin
+    DIR default 0
+    PWM default 0 duty cycle
+    BRAKE default 0 (off)
+    SLEEP default 1 (off)
+    }}
+pub InitPins(numClockPulses, numBasePeriods) | x 
+  dira.[DIR]~~
+  outa.[DIR]~
+  x.word[0] := numClockPulses     'Set base period's # of clock pulses 10*3.33ns=33ns
+  x.word[1] := numBasePeriods   'Set PMW frame period to be made up of 1000 base periods
+  clockPulses := numClockPulses
+  basePeriods := numBasePeriods
+  pinstart(PWM, p_oe+p_pwm_triangle, x, 0) 'Start sawtooth PWM smartpin
+
+  ' May want to provide optional NC
+  dira.[BRAKE]~~
+  outa.[BRAKE]~
+  dira.[SLEEP]~~
+  outa.[SLEEP]~~
+  dira.[FAULT]~
+  dira.[CS]~ ' This would need to be a smart pin
+
+{{Drive motor forward with speed 0-numBasePeriods}}
+pub Drive(speed) ' Direction determined by sign of number (2s complement)
+  outa.[DIR] := (speed >> 31 & 1)
+  wypin(PWM, 0#>speed<#numBasePeriods)
+
+pub Drive(speed, direction) ' any value other than 0 drives backwards
+  outa.[DIR] := direction
+  wypin(PWM, 0#>speed<#numBasePeriods)
+    
+pub DriveForward(speed)
+  outa.[DIR] := 0
+  wypin(PWM, 0#>speed<#numBasePeriods) ' TODO: Maybe incorporate a minimum duty cycle
+
+pub DriveBackward(speed)
+  outa.[DIR] := 1
+  wypin(PWM, 0#>speed<#numBasePeriods)
+
+pub Stop()
+  ' Turn off PWM
+  wypin(PWM, 0)
+
+pub Brake()
+  outa.[BRAKE]~~
+
+pub Unbrake()
+  outa.[BRAKE]~
+
+pub Sleep()
+  outa.[SLEEP]~
+
+pub Wake()
+  outa.[SLEEP]~~

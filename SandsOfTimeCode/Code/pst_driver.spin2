@@ -1,0 +1,751 @@
+'' =================================================================================================
+''
+''   File....... jm_serial.spin2
+''   Purpose.... True mode, unbuffererd serial coms using smart pins
+''               -- same features as original P1 FDS with minor enhancements
+''   Authors.... Eric Smith, Chip Gracey, and Jon McPhalen
+''               -- see below for terms of use
+''   E-mail..... jon.mcphalen@gmail.com
+''   Started....
+''   Updated.... 28 JUN 2020
+''   Modified by Gavin Garner April 5, 2021:
+''   -name changed to "pst_driver"
+''   -methods added at end to make driver easier to use and to enable keyboard input
+''   Modified by Gavin Garner April 10, 2022:
+''   -added backspace handling when entering numbers and strings
+''   -added 5 second countdown to make transitioning between Propeller Tool and PST smoother
+'' =================================================================================================
+
+
+con { fixed io pins }
+
+  RX1     = 63  { I }                                           ' programming / debug
+  TX1     = 62  { O }
+
+  FS_CS   = 61  { O }                                           ' flash storage
+  FS_CLK  = 60  { O }
+  FS_MOSI = 59  { O }
+  FS_MISO = 58  { I }
+
+
+con { pst formatting }
+
+  HOME    =  1
+  CRSR_XY =  2
+  CRSR_LF =  3
+  CRSR_RT =  4
+  CRSR_UP =  5
+  CRSR_DN =  6
+  BELL    =  7
+  BKSP    =  8
+  TAB     =  9
+  LF      = 10
+  CLR_EOL = 11
+  CLR_DN  = 12
+  CR      = 13
+  CRSR_X  = 14
+  CRSR_Y  = 15
+  CLS     = 16
+
+
+obj
+
+  nstr : "jm_nstr"                                              ' number-to-string
+
+
+var
+
+  long  rxp
+  long  txp
+
+  byte  pbuf[80]                                                ' padded strings
+
+  byte  rx_buffer[16]                                         'transmit and receive buffers
+  byte  tx_buffer[16]
+  'long  cog
+  long  rx_head, rx_tail, tx_head, tx_tail, rx_pin, tx_pin, rxtx_mode, bit_ticks, buffer_ptr
+
+
+pub null()
+
+  '' This is not a top level object
+
+
+pub start(baudrate)
+
+'' Start simple serial coms on default pins at baudrate
+
+  startx(RX1, TX1, baudrate)                                    ' use programming port
+
+
+pub startx(rxpin, txpin, baud) | bitmode, countdown
+
+'' Start simple serial coms on rxpin and txpin at baud
+
+  longmove(@rxp, @rxpin, 2)                                     ' save pins
+
+  bitmode := muldiv64(clkfreq, $1_0000, baud) & $FFFFFC00       ' set bit timing
+  bitmode |= 7                                                  ' set bits (8)
+
+  org
+                fltl      rxpin                                 ' configure rx smart pin
+                wrpin     ##P_ASYNC_RX, rxpin
+                wxpin     bitmode, rxpin
+                drvl      rxpin
+                fltl      txpin                                 ' configure tx smart pin
+                wrpin     ##(P_ASYNC_TX | P_OE), txpin
+                wxpin     bitmode, txpin
+                drvl      txpin
+  end
+  repeat countdown from 5 to 1                            'Give the user time to open and enable the PST program
+    ClearHome()                                           ' after downloading the Propeller program
+    str(string("The PST interface will start in "))
+    dec(countdown)
+    str(string(" seconds."))
+    waitms(1000)
+  ClearHome()
+
+
+
+pub rxflush()
+
+'' Clear serial input
+
+  repeat
+  while (rxcheck() >= 0)
+
+
+pub rxcheck() : rxbyte | check
+
+'' Check for serial input
+'' -- returns -1 if nothing available
+
+  rxbyte := -1
+  check := pinr(rxp)
+  if (check)
+    rxbyte := rdpin(rxp) >> 24
+
+
+pub rxtime(ms) : b | mstix, t
+
+'' Wait ms milliseconds for a byte to be received
+'' -- returns -1 if no byte received, $00..$FF if byte
+
+  mstix := clkfreq / 1000
+
+  t := getct()
+  repeat
+  until ((b := rxcheck()) >= 0) or (((getct() - t) / mstix) > ms)
+
+
+pub rx() : rxbyte
+
+'' Wait for serial input
+'' -- blocks!
+
+  repeat
+    rxbyte := rxcheck()
+  until (rxbyte >= 0)
+
+
+pub tx(b)
+
+'' Emit byte
+
+  wypin(txp, b)
+  txflush()
+
+
+pub txn(b, n)
+
+'' Emit byte n times
+
+  repeat n
+    tx(b)
+
+
+pub txflush() | check
+
+'' Wait until last byte has finished
+
+  repeat
+    check := pinr(txp)
+  while (check == 0)
+
+
+pub str(p_str)
+
+'' Emit z-string at p_str
+
+  repeat (strsize(p_str))
+    tx(byte[p_str++])
+
+
+pub substr(p_str, len) | b
+
+'' Emit len characters of string at p_str
+'' -- aborts if end of string detected
+
+  repeat len
+    b := byte[p_str++]
+    if (b > 0)
+      tx(b)
+    else
+      quit
+
+
+pub padstr(p_str, width, pad)
+
+'' Emit p_str as padded field of width characters
+'' -- pad is character to use to fill out field
+'' -- positive width causes right alignment
+'' -- negative width causes left alignment
+
+  str(nstr.padstr(p_str, width, pad))
+
+
+con { formatted strings }
+
+{{
+    Escaped characters
+
+      \\          backslash char
+      \%          percent char
+      \q          double quote
+      \b          backspace
+      \t          tab (horizontal)
+      \n          new line (vertical tab)
+      \r          carriage return
+      \nnn        arbitrary ASCII value (nnn is decimal)
+
+    Formatted arguments
+
+      %w.pf       print argument as decimal width decimal point
+      %[w[.p]]d   print argument as decimal
+      %[w[.p]]x   print argument as hex
+      %[w[.p]]o   print argument as octal
+      %[w[.p]]q   print argument as quarternary
+      %[w[.p]]b   print argument as binary
+      %[w]s       print argument as string
+      %[w]c       print argument as character (
+
+                  -- w is field width
+                     * positive w causes right alignment in field
+                     * negative w causes left alignment in field
+                  -- %ws aligns s in field (may truncate)
+                  -- %wc prints w copies of c
+                  -- p is precision characters
+                     * number of characters to use, aligned in field
+                       -- prepends 0 if needed to match p
+                       -- for %w.pf, p is number of digits after decimal point
+}}
+
+
+pub fstr0(p_str)
+
+'' Emit string with formatting characters.
+
+  format(p_str, 0)
+
+
+pub fstr1(p_str, arg1)
+
+'' Emit string with formatting characters and one argument.
+
+  format(p_str, @arg1)
+
+
+pub fstr2(p_str, arg1, arg2)
+
+'' Emit string with formatting characters and two arguments.
+
+  format(p_str, @arg1)
+
+
+pub fstr3(p_str, arg1, arg2, arg3)
+
+'' Emit string with formatting characters and three arguments.
+
+  format(p_str, @arg1)
+
+
+pub fstr4(p_str, arg1, arg2, arg3, arg4)
+
+'' Emit string with formatting characters and four arguments.
+
+  format(p_str, @arg1)
+
+
+pub fstr5(p_str, arg1, arg2, arg3, arg4, arg5)
+
+'' Emit string with formatting characters and five arguments.
+
+  format(p_str, @arg1)
+
+
+pub fstr6(p_str, arg1, arg2, arg3, arg4, arg5, arg6)
+
+'' Emit string with formatting characters and six arguments.
+
+  format(p_str, @arg1)
+
+
+pub format(p_str, p_args) | idx, c, asc, field, digits
+
+'' Emit formatted string with escape sequences and embedded values
+'' -- p_str is a pointer to the format control string
+'' -- p_args is pointer to array of longs that hold field values
+''    * field values can be numbers, characters, or pointers to strings
+
+  idx := 0                                                     ' value index
+
+  repeat
+    c := byte[p_str++]
+    if (c == 0)
+      return
+
+    elseif (c == "\")
+      c := byte[p_str++]
+      if (c == "\")
+        tx("\")
+      elseif (c == "%")
+        tx("%")
+      elseif (c == "q")
+        tx(34)
+      elseif (c == "b")
+        tx(BKSP)
+      elseif (c == "t")
+        tx(TAB)
+      elseif (c == "n")
+        tx(LF)
+      elseif (c == "r")
+        tx(CR)
+      elseif ((c >= "0") and (c <= "9"))
+        --p_str
+        p_str, asc, _ := get_nargs(p_str)
+        if ((asc >= 0) and (asc <= 255))
+          tx(asc)
+
+    elseif (c == "%")
+      p_str, field, digits := get_nargs(p_str)
+      c := byte[p_str++]
+      if (c == "f")
+        str(nstr.fmt_number(long[p_args][idx++], 99, digits, field, " "))
+      elseif (c == "d")
+        str(nstr.fmt_number(long[p_args][idx++], 10, digits, field, " "))
+      elseif (c == "x")
+        str(nstr.fmt_number(long[p_args][idx++], 16, digits, field, " "))
+      elseif (c == "o")
+        str(nstr.fmt_number(long[p_args][idx++], 08, digits, field, " "))
+      elseif (c == "q")
+        str(nstr.fmt_number(long[p_args][idx++], 04, digits, field, " "))
+      elseif (c == "b")
+        str(nstr.fmt_number(long[p_args][idx++], 02, digits, field, " "))
+      elseif (c == "s")
+        str(nstr.padstr(long[p_args][idx++], field, " "))
+      elseif (c == "c")
+        txn(long[p_args][idx++], (abs field) #> 1)
+
+    else
+      tx(c)
+
+
+pri get_nargs(p_str) : p_str1, val1, val2 | c, sign
+
+'' Parse one or two numbers from string in n, -n, n.n, or -n.n format
+'' -- dpoint separates values
+'' -- only first # may be negative
+'' -- returns pointer to 1st char after value(s)
+
+  c := byte[p_str]                                              ' check for negative on first value
+  if (c == "-")
+    sign := -1
+    ++p_str
+  else
+    sign := 0
+
+  repeat                                                        ' get first value
+    c := byte[p_str++]
+    if ((c >= "0") and (c <= "9"))
+      val1 := (val1 * 10) + (c - "0")
+    else
+      if (sign)
+        val1 := -val1
+      quit
+
+  if (c == ".")                                                 ' if dpoint
+    repeat                                                      '  get second value
+      c := byte[p_str++]
+      if ((c >= "0") and (c <= "9"))
+        val2 := (val2 * 10) + (c - "0")
+      else
+        quit
+
+  p_str1 := p_str - 1                                           ' back up to non-digit
+
+
+pub fmt_number(value, base, digits, width, pad)
+
+'' Emit value converted to number in padded field
+'' -- value is converted using base as radix
+''    * 99 for decimal with digits after decimal point
+'' -- digits is max number of digits to use
+'' -- width is width of final field (max)
+'' -- pad is character that fills out field
+
+  str(nstr.fmt_number(value, base, digits, width, pad))
+
+
+pub dec(value)
+
+'' Emit value as decimal
+
+  str(nstr.itoa(value, 10, 0))
+
+
+pub fxdec(value, digits)
+
+'' Emit value as decimal using fixed # of digits
+'' -- may add leading zeros
+
+  str(nstr.itoa(value, 10, digits))
+
+
+pub jdec(value, digits, width, pad)
+
+'' Emit value as decimal using fixed # of digits
+'' -- aligned in padded field (negative width to left-align)
+'' -- digits is max number of digits to use
+'' -- width is width of final field (max)
+'' -- pad is character that fills out field
+
+  str(nstr.fmt_number(value, 10, digits, width, pad))
+
+
+pub dpdec(value, dp)
+
+'' Emit value as decimal with decimal point
+'' -- dp is number of digits after decimal point
+
+  str(nstr.dpdec(value, dp))
+
+
+pub jdpdec(value, dp, width, pad)
+
+'' Emit value as decimal with decimal point
+'' -- aligned in padded field (negative width to left-align)
+'' -- dp is number of digits after decimal point
+'' -- width is width of final field (max)
+'' -- pad is character that fills out field
+
+  str(nstr.fmt_number(value, 99, dp, width, pad))
+
+
+pub hex(value)
+
+'' Emit value as hexadecimal
+
+  str(nstr.itoa(value, 16, 0))
+
+
+pub fxhex(value, digits)
+
+'' Emit value as hexadecimal using fixed # of digits
+
+  str(nstr.itoa(value, 16, digits))
+
+
+pub jhex(value, digits, width, pad)
+
+'' Emit value as quarternary using fixed # of digits
+'' -- aligned inside field
+'' -- pad fills out field
+
+  str(nstr.fmt_number(value, 16, digits, width, pad))
+
+
+pub oct(value)
+
+'' Emit value as octal
+
+  str(nstr.itoa(value, 8, 0))
+
+
+pub fxoct(value, digits)
+
+'' Emit value as octal using fixed # of digits
+
+  str(nstr.itoa(value, 8, digits))
+
+
+pub joct(value, digits, width, pad)
+
+'' Emit value as octal using fixed # of digits
+'' -- aligned inside field
+'' -- pad fills out field
+
+  str(nstr.fmt_number(value, 8, digits, width, pad))
+
+
+pub qrt(value)
+
+'' Emit value as quarternary
+
+  str(nstr.itoa(value, 4, 0))
+
+
+pub fqrt(value, digits)
+
+'' Emit value as quarternary using fixed # of digits
+
+  str(nstr.itoa(value, 4, digits))
+
+
+pub jqrt(value, digits, width, pad)
+
+'' Emit value as quarternary using fixed # of digits
+'' -- aligned inside field
+'' -- pad fills out field
+
+  str(nstr.fmt_number(value, 4, digits, width, pad))
+
+
+pub bin(value)
+
+'' Emit value as binary
+
+  str(nstr.itoa(value, 2, 0))
+
+
+pub fxbin(value, digits)
+
+'' Emit value as binary using fixed # of digits
+
+  str(nstr.itoa(value, 2, digits))
+
+
+pub jbin(value, digits, width, pad)
+
+'' Emit value as binary using fixed # of digits
+'' -- aligned inside field
+'' -- pad fills out field
+
+  str(nstr.fmt_number(value, 2, digits, width, pad))
+
+con {New methods added by Gavin Garner April 2021
+}
+pub ClearHome()
+  tx(CLS)                                       'Clears the screen and sets cursor to its home position
+  tx(HOME)
+
+pub ClearRight()
+  tx(CRSR_XY)                                   'Clears everything to the right of the cursor
+
+pub NewLine()
+  tx(CR)                                        'Creates a new line and moves cursor to the far left
+
+pub NewLines(number)                            'Specify the number of new lines desired
+  repeat number
+    tx(CR)                                      'Carriage return (moves cursor to the far left)
+
+pub SetCursorHome()
+  tx(Home)                                      'Moves the cursor to the upper left of the screen
+
+pub SetCursor(column,row)
+  tx(CRSR_XY)                                    'Moves the cursor to a specific position
+  tx(column)
+  tx(row)
+
+pub GetDec() : value | tempstr[11]                'Gets decimal character representation of a number from the terminal
+    GetStr(@tempstr)                            ' and returns the corresponding value
+    value := StrToDec(@tempstr)
+
+pub GetStr(stringptr) | index
+  'Gets zero terminated string and stores it, starting at the stringptr memory address
+  index~
+  repeat until (byte[stringptr][index++] := rx()) == CR    'CR=Carriage Return=13 (Enter key)
+    if (byte[stringptr][index-1]) == BKSP          'BKSP=8=Backspace (Backspace key)
+      index:=index-2
+  byte[stringptr][--index]~                        'Change final CR to a zero to make a zero-terminated string
+
+
+
+pub StrToDec(stringptr) : value | character, index, multiply
+  'Converts a zero terminated string representation of a decimal number to a value
+  value := index := 0
+  repeat until ((character := byte[stringptr][index++]) == 0)
+     if character >= "0" and character <= "9"
+        value := value * 10 + (character - "0")
+  if byte[stringptr] == "-"
+     value := - value
+
+
+pub GetBin() : value | tempstr[11]
+  'Gets binary character representation of a number from the terminal and returns the corresponding value
+  GetStr(@tempstr)
+  value := StrToBin(@tempstr)
+
+pub StrToBin(stringptr) : value | character, index
+  'Converts a zero terminated string representaton of a binary number to a value
+  value:=index:= 0
+  repeat until ((character:=byte[stringptr][index++])==0)
+     if character=="0" or character=="1"                 ' "0"=48, "1"=49
+        value := value * 2 + (character - "0")               '
+  if byte[stringptr] == "-"
+     value := - value
+
+pub GetFloat()  : value | tempstr[11]     'Gets a floating point number from the PST (ex. 3.14159HELPIMTRAPPEDINAUNIVERSEFACTORY9302)
+  GetStr(@tempstr)
+  value:= StrToFloat(@tempstr)         'Returns value in IEEE 754 float point
+
+pub StrToFloat(strptr) : flt | int,exp,sign
+  'Converts an input string in the from XX.XX (with an integer, decimal point, and fraction part)
+  ' into a floating point number
+  ' This code was borrowed from http://forums.parallax.com/forums/default.aspx?f=25&m=280607 (11/21/2008)
+  int := exp := sign := 0
+  repeat strsize(strptr)                   'string to integer
+    case byte[strptr]
+      "-":      sign~~
+      ".":      exp := 1
+      "0".."9": int := int*10 + byte[strptr] - "0"
+                if exp
+                  exp++                    'count dec places
+      other:    quit
+    strptr++
+  if sign
+    int := -int
+  flt := FFloat(int)
+  if exp
+    repeat exp-1
+      flt := FDiv(flt,10.0)                'adjust float
+
+pub Char(bytechr)
+  'This method was borrowed directly from the "Parallax Serial Terminal Plus" object
+  'Send single-byte character.  Waits for room in transmit buffer if necessary.
+  {
+  Parameter:
+    bytechr - character (ASCII byte value)
+              to send.
+  Examples:
+    'Send "A" to Parallax Serial Terminal
+    pst.Char("A")
+    'Send "A" to Parallax Serial Terminal
+    'using its ASCII value
+    pst.Char(65)
+  }
+
+
+  repeat until (tx_tail <> ((tx_head + 1) & 63))
+  tx_buffer[tx_head] := bytechr
+  tx_head := (tx_head + 1) & 63
+
+  if rxtx_mode & %1000
+    CharIn()
+
+pub CharIn() : bytechr
+  'This method was borrowed directly from the "Parallax Serial Terminal Plus" object
+  'Send single-byte character.  Waits for room in transmit buffer if necessary.
+
+  {Returns:
+    A byte value (0 to 255) which
+    represents a character that has been typed
+    into the Parallax Serial Terminal.
+
+  Example:
+    ' Get a character that is typed into the
+    ' Parallax Serial Terminal, and copy it to
+    ' a variable named c.
+    c := pst.CharIn
+  }
+
+  repeat while (bytechr := RxCheck()) < 0
+
+pub FFloat(integer) : single | s, x, m
+  'Converts an integer number to a floating-point-formatted number
+  if m := abs(integer)             'absolutize mantissa, if 0, result 0
+    s := integer >> 31          'get sign
+    x := encod(m) - 1                'get exponent
+    m <<= 31 - x                'msb-justify mantissa
+    m >>= 2                     'bit29-justify mantissa
+    return Pack(@s)             'pack result
+
+pub FDiv(singleA, singleB) : single | sa, xa, ma, sb, xb, mb, result
+  'Divide singleA by singleB (which are two floating-point values)
+  Unpack(@sa, singleA)          'unpack inputs
+  Unpack(@sb, singleB)
+  sa ^= sb                      'xor signs
+  xa -= xb                      'subtract exponents
+  repeat 30                     'divide mantissas
+    result <<= 1
+    if ma >= mb
+      ma -= mb
+      result++
+    ma <<= 1
+  ma := result
+  return Pack(@sa)              'pack result
+
+pri Pack(pointer) : single | s, x, m, result
+'Pack floating-point from (sign, exponent, mantissa) at pointer
+
+  longmove(@s, pointer, 3)      'get (s,x,m) structure into locals
+
+  if m                          'if mantissa 0, result 0
+
+    result := 33 - encod(m)          'determine magnitude of mantissa
+    m <<= result                'msb-justify mantissa without leading 1
+    x += 3 - result             'adjust exponent
+
+    m += $00000100              'round up mantissa by 1/2 lsb
+    if not m & $FFFFFF00        'if rounding overflow,
+      x++                       '..increment exponent
+
+    x := x + 127 #> -23 <# 255  'bias and limit exponent
+
+    if x < 1                    'if exponent < 1,
+      m := $8000_0000 +  m >> 1 '..replace leading 1
+      m >>= -x                  '..shift mantissa down by exponent
+      x~                        '..exponent is now 0
+
+    return s << 31 | x << 23 | m >> 9 'pack result
+
+pri Unpack(pointer, single) | s, x, m, result
+'Unpack floating-point into (sign, exponent, mantissa) at pointer
+  s := single >> 31             'unpack sign
+  x := single << 1 >> 24        'unpack exponent
+  m := single & $007F_FFFF      'unpack mantissa
+
+  if x                          'if exponent > 0,
+    m := m << 6 | $2000_0000    '..bit29-justify mantissa with leading 1
+  else
+    result := encod(m) - 23          'else, determine first 1 in mantissa
+    x := result                 '..adjust exponent
+    m <<= 7 - result            '..bit29-justify mantissa
+
+  x -= 127                      'unbias exponent
+  longmove(pointer, @s, 3)      'write (s,x,m) structure from locals
+
+
+con { license }
+
+{{
+
+  Terms of Use: MIT License
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software
+  without restriction, including without limitation the rights to use, copy, modify,
+  merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following
+  conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies
+  or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+  INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+  PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+  CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+  OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+}}
