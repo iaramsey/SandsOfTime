@@ -1,0 +1,36 @@
+{BTS7960 Test}
+
+con
+  _clkfreq = 300_000_000
+
+
+obj
+  main_arm : "BTS7960" | RPWM=10, LPWM=11, R_EN=8, L_EN=9, R_IS=0, L_IS=1
+
+
+pub Main()
+  main_arm.InitPins(10, 1000)
+
+  main_arm.Drive(500)
+  waitms(5000)
+
+  main_arm.Drive(-500)
+  waitms(5000)
+
+  main_arm.Drive(500, 0)
+  waitms(5000)
+
+  main_arm.Drive(500, 1)
+  waitms(5000)
+
+  main_arm.DriveForward(500)
+  waitms(5000)
+
+  main_arm.DriveBackward(500)
+  waitms(5000)
+
+  main_arm.Stop()
+
+
+
+

@@ -1,47 +1,94 @@
-{Object_Title_and_Purpose}
-
+{SandsOfTime Top Level}
 
 con
   _clkfreq = 300_000_000
-  {Encoder Constants}  
+  
+  {Absolute Encoder Constants}  
   CLK = 0
   DATA = 1
   CS0 = 2    ' Start of encoder chip select pin range
   CSf = 15   ' End of encoder chip select pin range
   NumEnc = CSf - CS0
-  {Motor Constants}
+  MainArmEncPin = 15
+  AbsEncTolerance = 10 ' In encoder counts
+
+  {Quadrature Encoder Constants}
+  ExtendEncBotPin = 2
+  ExtendEncTopPin = 2
+
+  SpinEncBotPin = 2
+  SpinEncTopPin = 2
+
+  QuadEncTolerance = 3
+
+  {Limit Switch Constants}
+  LS1 = 16
+  LS2 = 17
 
   {LED Constants}
 
-  {RTC Clock Constants}
-  SS = 16     ' SPI Chip/Slave Select
-  MOSI = 17   ' SPI Master Out / Slave In
-  MISO = 18   ' SPI Master In / Slave Out
-  SCLK = 19   ' SPI Clock
-  SQW = -1    ' Optional Square Wave Interrupt Pin
-
 var
   word EncPos[NumEnc]
-  long Stack2[100], Stack3[100] ' TODO: Figure out optimal number for this
+  word EncSetPoint[NumEnc]
+  long Stack2[100], Stack3[100], Stack4[100], Stack5[100] ' TODO: Figure out optimal number for this
   word hour, minute, second, day, date, month, year
+  
+  long max_extension_count
+  long extend_enc_count
+  long spin_enc_count
+   
+
+dat
+' where arm needs to be to reach a certain hourglass (starting and ending at 12) (stolen from old)
+hour_pos word 1022, 940, 856, 770, 687, 597, 512, 432, 337, 252, 172, 87, 1022
+
+' how far arm needs to extend to reach
+hour_extension long { ' definitely could be different depending on # enc counts
+} $0000 
+
 
 obj
 
   ' TODO: Find the spin2 versions of these
-  rgb : "WS2812B_RGB_LED_Driver"
-  lcd : "serial_LCD"
+  ' rgb : "WS2812B_RGB_LED_Driver"
+  ' lcd : "serial_LCD"
+  ' object parameterization requires spin v37
+  DS3234 : "DS3234"       | SS=0, MOSI=1, MISO=2, SCLK=3, SQW=-1
+  main_arm : "BTS7960"    | RPWM=0, LPWM=1, R_EN=2, L_EN=3, R_IS=4, L_IS=5
+  arm_extend : "DRV8801"  | DIR=0, PWM=1, BRAKE=2, SLEEP=3, FAULT=4, CS=5
+  arm_spin : "DRV8801"    | DIR=0, PWM=1, BRAKE=2, SLEEP=3, FAULT=4, CS=5
 
-pub Main()
-  cogspin(2, ReadAbsEncoders, @Stack2) ' Process reading absolute encoders
-  cogspin(3, ReadQuadEncoders, @Stack3) ' Process reading quadrature encoders
-  cogspin(4, , @Stack4) 
+pub Main() | hour_i
+  arm_extend.InitPins(10, 1000)
+  arm_spin.InitPins(10, 1000)
+  main_arm.InitPins(10, 1000)
+  DS3234.InitPins()
 
+  cogspin(2, ReadAbsEncoders, @Stack2)    ' Process reading absolute encoders
+  cogspin(3, ReadQuadEncoders, @Stack3)   ' Process reading quadrature encoders
+  cogspin(4, ReadRTClock, @Stack4)        ' 
 
+  repeat
+    ' if it's time to flip an hourglass (~20 seconds before 5 minutes)
+    if (minute +// 5) == 4 && second +>= 40
+      hour_i := ((minute+1)+//60)/5 ' Maybe a sketchy scheme
+      SetMainArmPos(hour_pos[hour_i]) 
+      ' TODO: Give arm time to move
+      ExtendArm(hour_extension[hour_i])
+      ' Wait for arm to extend and then flip when it will be ~ flipped at 0
+      RotateHourglass(hour_i, abs (512 - EncPos[hour_i]) < AbsEncTolerance ? 0 : 512) ' Should swap between 0 and 512
+    else ' otherwise show the hour and maintain hourglass positions
+      repeat i from CS0 to CSf-1 ' all absolute encoders other than main_arm
+        error := CalculateError(EncPos[i], EncSetPoint[i])
+        if abs error > AbsEncTolerance ' an hourglass is out of pos
+          SetMainArmPos(arm_pos[i])
+          RotateHourglass(i, EncSetPoint[i])
+      SetMainArmPos(arm_pos[hour])
 
 
 pub ReadAbsEncoders() | i, value
-  dira.[CLK]~~  ' Output
-  dira.[DATA]~  ' Input
+  dira.[CLK]~~
+  dira.[DATA]~
   dira.[CS0..CSf]~~
   outa.[CS0..CSf]~~
   repeat
@@ -57,11 +104,63 @@ pub ReadAbsEncoders() | i, value
 
 
 pub ReadQuadEncoders()
+  dira.[LS1]~
+  dira.[LS2]~
 
-pub ReadLimitSwitches()
+   ' Drive Backwards and hit limit switch --> 0 position
+  repeat until ina.[LS1] == 1 ' may need to be 1
+    arm_extend.DriveBackward(250)
+  arm_extend.Stop()
+  'Start quadrature encoder smartpin reader watching provided Pin (Apin=%0000) and +1 pin up, (so Bpin=%0001)
+  pinstart(ExtendEncBotPin, p_quadrature + %0000<<28 + %0001<<24, 0, 0) ' TODO: Maybe more dynamic pin selection
+  
+  ' Drive Forwards and hit 2nd limit switch --> Max position
+  repeat until ina.[LS2] == 1
+    arm_extend.DriveForward(250)
+  arm_extend.Stop()
 
-pub RotateArm(position)
+  max_extension_count := rdpin(ExtendEncBotPin)
+  pinstart(SpinEncBotPin, p_quadrature + %0000<<28 + %0001<<24, 0, 0) 
+  repeat
+    extend_enc_count := rdpin(ExtendEncBotPin)
+    spin_enc_count := rdpin(SpinEncBotPin)
+    ' TODO: Deal with limit switches except maybe handled in hardware
 
-pub ExtendArm(length)
 
+pub ReadRTClock()
+  repeat
+    ' Read the time from the chip
+    DS3234.GetTime()
+    ' Convert it to usable numbers for our purposes and return
+    second, minute, hour, day, date, month, year = DS3234.ConvertToReadable() ' Idk if this works        
+
+
+pub CalculateError(current, target) | err, a, b : error ' Theoretically handles wraparound
+  a := current-target
+  b := target - current
+  err := abs a < abs b a:b
+  return err
+
+pub SetMainArmPos(enc_pos) | error
+  error := CalculateError(EncPos[MainArmEncPin], enc_pos)
+  repeat while abs error > AbsEncTolerance  
+    main_arm.Drive(error*numBasePeriods/1024)
+    error := CalculateError(EncPos[MainArmEncPin], enc_pos)
+  main_arm.Stop()
+
+
+pub ExtendArm(enc_pos) | error ' TODO: Figure out conversion of distance to quad encoder counts or do calibration sequence
+  error := CalculateError(extend_enc_count, enc_pos)
+  repeat while abs error > QuadEncTolerance  
+    arm_extend.Drive(error*numBasePeriods/1024)
+    error := CalculateError(extend_enc_count, enc_pos)
+  arm_extend.Stop()
+
+
+pub RotateHourglass(hour, enc_pos) | error
+  error := CalculateError(EncPos[hour], enc_pos)
+  repeat while abs error > AbsEncTolerance  
+    arm_spin.Drive(error*numBasePeriods/1024)
+    error := CalculateError(EncPos[hour], enc_pos)
+  arm_spin.Stop()
 

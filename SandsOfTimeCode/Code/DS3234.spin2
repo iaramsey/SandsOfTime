@@ -70,12 +70,14 @@ pri SPIWrite(value) | i
 
 '*** Clock Functions ***
 
-pub InitClock()
+pub InitPins()
   dira.[SS]~~
   dira.[MISO]~
   dira.[MOSI]~~
   dira.[SCLK]~~
   outa.[SS]~~
+  if SQW != -1
+    dira.[SQW]~
 
 {{Gets raw time data from registers seconds through year $00-$06}}
 pub GetTime()  | i      ''Refresh time[0] through time[6] values
@@ -95,7 +97,7 @@ pub SetTime() | i
 
 pub SetMode(is24hours)
 
-pub convertToReadable()
+pub ConvertToReadable() : second, minute, hour, day, date, month, year
   time_readable[0]:=(time_raw[0]>>4)*10 + (time_raw[0] & $0f)                       'seconds
   time_readable[1]:=(time_raw[1]>>4)*10 + (time_raw[1] & $0f)                       'minutes
   time_readable[2]:=(time_raw[2] & $10)*10 + (time_raw[2] & $0f)                    'hours TODO: Ignores AM/PM and potential 24 hours
@@ -103,6 +105,8 @@ pub convertToReadable()
   time_readable[4]:=(time_raw[4]>>4)*10 + (time_raw[4] & $0f)                       'date
   time_readable[5]:=(time_raw[5] & $10)*10 + (time_raw[5] & $0f)                    'month
   time_readable[6]:=(time_raw[5]>>7)*100 + (time_raw[6]>>4)*10 + (time_raw[6] & $0f)    'year
+
+  return time_readable[0], time_readable[1], time_readable[2], time_readable[3], time_readable[4], time_readable[5], time_readable[6]
 
 
 pub DisplayTime()
