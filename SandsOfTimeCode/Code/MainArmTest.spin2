@@ -1,0 +1,22 @@
+{Object_Title_and_Purpose}
+
+
+CON
+  _clkfreq = 300_000_000
+
+  duty = 300                                                  'Standard clock frequency = 160 MHz
+
+OBJ
+  main_arm : "BTS7960" | RPWM=31, LPWM=30, R_EN=2, L_EN=3, R_IS=4, L_IS=5
+
+
+PUB MotorTest()
+  main_arm.InitPins(10, 1000)
+  repeat
+    main_arm.Drive(duty)
+    waitms(10000)
+    main_arm.Stop()
+    waitms(1000)
+    main_arm.Drive(-duty)
+    waitms(10000)
+    main_arm.Stop()

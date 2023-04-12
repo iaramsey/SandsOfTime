@@ -1,0 +1,32 @@
+{Object_Title_and_Purpose}
+
+
+CON
+  _clkfreq = 300_000_000                                                  'Standard clock frequency = 160 MHz
+
+  CLK = 19
+  DATA = 18
+  MainArmEncPin = 17
+
+obj
+
+  pst : "pst_driver"
+
+pub ReadEncoder() | value
+  dira.[CLK]~~
+  dira.[DATA]~
+  dira.[MainArmEncPin]~~
+  outa.[MainArmEncPin]~~
+  pst.start(9600)
+  repeat
+    outa.[MainArmEncPin]~
+    outa.[CLK]~
+    value:=0
+    repeat 16   ' Read 16 bits (top 10 are position)
+      outa.[CLK]~~
+      value := (value << 1) | ina.[DATA]
+      outa.[CLK]~
+    pst.dec(value >> 6)
+    pst.NewLine()
+    outa.[CLK]~~
+    outa.[MainArmEncPin]~~

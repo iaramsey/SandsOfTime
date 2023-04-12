@@ -1,46 +1,28 @@
 {BTS7960 H-Bridge Library}
-
+{https://www.handsontec.com/dataspecs/module/BTS7960%20Motor%20Driver.pdf}
 con
   _clkfreq = 300_000_000
 
   ' Pin assignments
-  RPWM = 10  ' Forward Level or PWM signal, Active High
-  LPWM = 11  ' Reverse Level or PWM signal, Active High
-  R_EN = 8  ' Forward Drive Enable Input, Active High/ Low Disable
-  L_EN = 9  ' Reverse Drive Enable Input, Active High/Low Disable
-  R_IS = 5  ' Forward Drive, Side current alarm output
-  L_IS = 6  ' Reverse Drive, Side current alarm output
+  RPWM = 1  ' Forward Level or PWM signal, Active High
+  LPWM = 2  ' Reverse Level or PWM signal, Active High
+  R_EN = 3  ' Forward Drive Enable Input, Active High/ Low Disable
+  L_EN = 4  ' Reverse Drive Enable Input, Active High/Low Disable
+  R_IS = -1  ' Forward Drive, Side current alarm output
+  L_IS = -1  ' Reverse Drive, Side current alarm output
+
+  MinDuty = 0
 
 var
-  long clockPulses, basePeriods
-
-pub Main()
-  InitPins(10, 1000)
-  waitms(2000)
-
-  DriveBackward(1000)
-  waitms(2000)
-  Stop()
-  {repeat
-    Drive(500)
-    waitms(1000)
-
-    'Drive2(500, 0)
-    'waitms(1000)
-
-    'DriveForward(500)
-    'waitms(1000)
-
-    'DriveBackward(500)
-    'waitms(1000)
-    Stop()}
-
+  long clockPulses, basePeriods, minDutyPeriods
 
 pub InitPins(numClockPulses, numBasePeriods) | x
   x.word[0] := numClockPulses   'Set base period's # of clock pulses 10*3.33ns=33ns
   x.word[1] := numBasePeriods   'Set PWM frame period to be made up of 1000 base periods
   clockPulses := numClockPulses
   basePeriods := numBasePeriods
+  minDutyPeriods := PercentageToBasePeriods(MinDuty)
+
   pinstart(RPWM, p_oe+p_pwm_triangle, x, 0)
   pinstart(LPWM, p_oe+p_pwm_triangle, x, 0)
 
@@ -49,30 +31,36 @@ pub InitPins(numClockPulses, numBasePeriods) | x
   dira.[L_EN]~~
   outa.[L_EN]~
 
-  dira.[R_IS]~
-  dira.[L_IS]~
+  if R_IS <> -1
+    dira.[R_IS]~
+  if L_IS <> -1
+    dira.[L_IS]~
+
+{{Helper method that converts a percentage to a number of periods wrt the number of base periods}}
+pri PercentageToBasePeriods(percentage) : periods
+  periods := percentage * basePeriods / 100
 
 pub DriveForward(speed)
-  outa.[L_EN]~
-  wypin(LPWM,0)
+  outa.[L_EN]~~
   outa.[R_EN]~~
-  wypin(RPWM, 0#>speed<#basePeriods) ' TODO: Maybe incorporate a minimum duty cycle
+  wypin(LPWM,0)
+  wypin(RPWM, minDutyPeriods#>speed<#basePeriods) ' TODO: Maybe incorporate a minimum duty cycle
 
 pub DriveBackward(speed)
-  outa.[R_EN]~
-  wypin(RPWM,0)
+  outa.[R_EN]~~
   outa.[L_EN]~~
-  wypin(LPWM, 0#>speed<#basePeriods)
+  wypin(RPWM,0)
+  wypin(LPWM, minDutyPeriods#>speed<#basePeriods)
 
 {{Drive motor forward with speed 0-numBasePeriods}}
 pub Drive(speed)
   if (speed >> 31 & 1) == 0 ' Direction determined by sign of number (2s complement)
-    DriveForward(abs speed) 
+    DriveForward(abs speed)
   else
     DriveBackward(abs speed)
 
 
-pub Drive2(speed, direction) ' any value other than 0 drives backwards
+pub DriveDirection(speed, direction) ' any value other than 0 drives backwards
   if direction == 0
     DriveForward(speed)
   else
