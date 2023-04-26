@@ -18,12 +18,8 @@ CON
   ' TODO: Add in Alarm and other things
 
 var
-  byte hour, minute, second, day, date, month, year
   byte time_raw[7]
-  long time_readable[7]
-
-obj
-pst : "pst_driver"
+  ' long time_readable[7]
 
 '*** SPI Helper functions ***
 
@@ -68,13 +64,63 @@ pub GetTime()  | i      ''Refresh time[0] through time[6] values
   SPIEnd()
 
 {{Set seconds through year registers ($00-$06) using raw data in time}}
-pub SetTime() | i
+pub SetTime(second, minute, hour, day, date, month, year) | i
   SPIStart()
   SPIWrite(sec_w)
-  repeat i from 0 to 6
-    SPIWrite(time_raw[i])
+  SPIWrite(second)
+  SPIWrite(minute)
+  SPIWrite(hour)
+  SPIWrite(day)
+  SPIWrite(date)
+  SPIWrite(month)
+  SPIWrite(year)
+  ' repeat i from 0 to 6
+  '   SPIWrite(time_raw[i])
   SPIEnd()
 
+pub SetSecond(second)
+  SPIStart()
+  SPIWrite(sec_w)
+  SPIWrite(second)
+  SPIEnd()
+
+pub SetMinute(minute)
+  SPIStart()
+  SPIWrite(min_w)
+  SPIWrite(minute)
+  SPIEnd()
+
+pub SetHour(hour)
+  SPIStart()
+  SPIWrite(hr_w)
+  SPIWrite(hour)
+  SPIEnd()
+
+pub SetDay(day)
+  SPIStart()
+  SPIWrite(day_w)
+  SPIWrite(day)
+  SPIEnd()
+
+pub SetDate(date)
+  SPIStart()
+  SPIWrite(date_w)
+  SPIWrite(date)
+  SPIEnd()
+
+pub SetMonth(month) ' TODO: make it also do century?
+  SPIStart()
+  SPIWrite(mo_cent_w)
+  SPIWrite(month)
+  SPIEnd()
+
+pub SetYear(year)
+  SPIStart()
+  SPIWrite(yr_w)
+  SPIWrite(year)
+  SPIEnd()
+
+{{Returns time in readable format}}
 pub ConvertToReadable() : sec, min, hr, dow, dte, mon, yr
 
   ' time_readable[0]:=(time_raw[0]>>4)*10 + (time_raw[0] & $0f)                       'seconds
@@ -92,5 +138,3 @@ pub ConvertToReadable() : sec, min, hr, dow, dte, mon, yr
   dte:=(time_raw[4]>>4)*10 + (time_raw[4] & $0f)                       'date
   mon:=(time_raw[5] & $10)*10 + (time_raw[5] & $0f)                    'month
   yr:=(time_raw[5]>>7)*100 + (time_raw[6]>>4)*10 + (time_raw[6] & $0f)    'year
-
-  ' return time_readable[0], time_readable[1], time_readable[2], time_readable[3], time_readable[4], time_readable[5], time_readable[6]

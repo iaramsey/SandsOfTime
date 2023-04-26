@@ -14,14 +14,13 @@ con
   MinDuty = 0
 
 var
-  long clockPulses, basePeriods, minDutyPeriods
+  long clockPulses, basePeriods
 
 pub InitPins(numClockPulses, numBasePeriods) | x
   x.word[0] := numClockPulses   'Set base period's # of clock pulses 10*3.33ns=33ns
   x.word[1] := numBasePeriods   'Set PWM frame period to be made up of 1000 base periods
   clockPulses := numClockPulses
   basePeriods := numBasePeriods
-  minDutyPeriods := PercentageToBasePeriods(MinDuty)
 
   pinstart(RPWM, p_oe+p_pwm_triangle, x, 0)
   pinstart(LPWM, p_oe+p_pwm_triangle, x, 0)
@@ -36,21 +35,17 @@ pub InitPins(numClockPulses, numBasePeriods) | x
   if L_IS <> -1
     dira.[L_IS]~
 
-{{Helper method that converts a percentage to a number of periods wrt the number of base periods}}
-pri PercentageToBasePeriods(percentage) : periods
-  periods := percentage * basePeriods / 100
-
 pub DriveForward(speed)
   outa.[L_EN]~~
   outa.[R_EN]~~
   wypin(LPWM,0)
-  wypin(RPWM, minDutyPeriods#>speed<#basePeriods) ' TODO: Maybe incorporate a minimum duty cycle
+  wypin(RPWM, MinDuty#>speed<#basePeriods) ' TODO: Maybe incorporate a minimum duty cycle
 
 pub DriveBackward(speed)
   outa.[R_EN]~~
   outa.[L_EN]~~
   wypin(RPWM,0)
-  wypin(LPWM, minDutyPeriods#>speed<#basePeriods)
+  wypin(LPWM, MinDuty#>speed<#basePeriods)
 
 {{Drive motor forward with speed 0-numBasePeriods}}
 pub Drive(speed)

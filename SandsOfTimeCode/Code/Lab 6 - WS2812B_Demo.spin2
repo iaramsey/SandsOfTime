@@ -1,0 +1,211 @@
+con _clkfreq = 300_000_000
+
+  maxaddress = 63             'For an 8x8 array, LEDs are addressed from 0-63 (increase this value if using arrays or strips with more LEDs)
+
+ 'Predefined colors                               green      red      blue
+  off            = 0                            '%00000000_00000000_00000000
+  red            = 255<<8                       '%00000000_11111111_00000000
+  green          = 255<<16                      '%11111111_00000000_00000000
+  blue           = 255                          '%00000000_00000000_11111111
+  white          = 255<<16+255<<8+255           '%11111111_11111111_11111111
+  cyan           = 255<<16+255                  '%11111111_00000000_11111111
+  magenta        = 255<<8+255                   '%00000000_11111111_11111111
+  yellow         = 255<<16+255<<8               '%11111111_11111111_00000000
+  chartreuse     = 255<<16+127<<8               '%11111111_01111111_00000000
+  orange         = 60<<16+255<<8                '%10100101_11111111_11010100
+  aquamarine     = 255<<16+127<<8+212           '%11111111_11111111_11010100
+  pink           = 128<<16+255<<8+128           '%10000000_11111111_10000000
+  turquoise      = 224<<16+63<<8+192            '%10000000_00111111_10000000
+  realwhite      = 255<<16+200<<8+255           '%11100000_11001000_11000000
+  indigo         = 75<<16+130                   '%00000000_01001011_10000010
+  violet         = 51<<16+215<<8+255            '%01111111_10111111_10111111
+
+var
+  long lights[maxaddress]   'Create an array of 64 longs to hold the color values of each LED in the 8x8 matrix
+
+pub RGB_LED_Demo2() | i,j,x
+  pr0:=@lights                  'Store Hub RAM address of start of "lights" array as pr0 (which PASM can read)
+  pr1:=4                        'Specify output pin as pr1 (which PASM can read), in this case, Pin 0 will be the output
+
+  repeat
+    AllOff()                      'You can turn off all of the LEDs at once
+    waitms(1000)
+
+    led(0,red)                    'ROYGBIV Rainbow demo
+    led(1,orange)                 'You can set a specific LED address to a predefined color
+    led(2,yellow)
+    led(3,green)
+    led(4,blue)
+    led(5,indigo)
+    led(6,violet)
+    led(7,white)
+    waitms(1000)
+    clear()                       'If you prefer, you can use "clear" instead of AllOff to turn off all lights
+                                  'You can also set the 8-bit RGB color values manually
+    led(8,255<<16)                'Set color to green=255 (red=blue=0)
+    led(9,255<<8)                 'Set color to red=255 (green=blue=0)
+    led(10,255)                   'Set color to blue=255 (green=red=0)
+    led(11,32<<16+32<<8+32)       'Set color to green=32 red=32 blue=32 (white)
+    led(12,$20_20_20)             'Or use hexadecimal* green=$20 red=$20 blue=$20 (white)
+    led(13,%00100000_00100000_00100000) 'Or 24-bit binary* where %11111111=255(white)
+    led(14,2105376)               'Or one big decimal number*
+    led(15,white)                 'Or just a predefined color constant
+    waitms(1000)                  '*These are cruel and unusual forms of punishment for anyone reading your code
+    AllOff()
+
+           '   G   R   B           You can also set each color component individually using the ledgrb method
+    ledgrb(16,64,64,64)           'Set color to green=64  red=64  blue=64 (white)
+    ledgrb(17,64,0,0)             'Set color to green=0   red=64  blue=0  (green)
+    ledgrb(18,0,64,0)             'Set color to green=64  red=0   blue=0  (red)
+    ledgrb(19,0,0,64)             'Set color to green=0   red=0   blue=64 (blue)
+    ledgrb(20,64,64,0)            'Set color to green=64  red=64  blue=0  (magenta)
+    ledgrb(21,64,0,64)            'Set color to green=64  red=0   blue=64 (cyan)
+    ledgrb(22,127,255,212)        'Set color to green=127 red=255 blue=212
+    random(23)                    'You can also set a color to be random
+    waitms(1000)
+    clear()
+
+    section(24,39,int(red,64))    'You can set sections of the strip's LEDs to one color at once
+    waitms(1000)
+
+    section(40,maxAddress,(int(blue,64)))  'You can set sections of the strip's LEDs to one color at once
+    waitms(1000)
+
+    repeat i from 0 to 63         'You can adjust the intensity of any color to a value 0-255
+      ledint(i,cyan,i)
+    waitms(1000)
+    clear()
+
+    allset(int(red,64))           'You can set all of the strip's LEDs to one color at once
+    waitms(500)                   ' and adjust the intensity/brightness 0-255
+    allset(int(green,64))
+    waitms(500)
+    allset(int(blue,64))
+    waitms(500)
+    clear()
+
+    repeat 3
+      repeat i from maxAddress to 0
+        led(i,int(white,32))
+        waitms(20)
+      repeat i from 0 to maxAddress
+        led(i,int(red,128))
+        waitms(20)
+      repeat i from maxAddress to 0
+        led(i,int(green,128))
+        waitms(20)
+      repeat i from 0 to maxAddress
+        led(i,int(blue,128))
+        waitms(20)
+
+    repeat i from 0 to maxaddress
+      ledint(i,cyan,64)
+      waitms(50)
+
+    repeat                                           'Repeat this last demo forever
+      x:=int(randomcolor(),128)                      'Get a random color and set its intensity to 50%
+      repeat i from 0 to maxAddress/2
+        led((maxAddress/2+1)+i,x)
+        led(maxAddress/2-i,x)
+        waitms(20)
+      waitms(100)
+      repeat i from 0 to maxAddress/2
+        led(i,off)
+        led(maxAddress-i,off)
+        waitms(20)
+
+
+pub Update() 'General-purpose Registers Used: pr0=address of "lights" variable, pr1=pin (these are passed to PASM from the Spin2 code)
+  pinl(pr1)                      'Send reset signal to WS2812B LEDs
+  waitus(300)                    'Reset signal width is 300us
+
+          org                    'Jump into inline Propeller 2 Assembly Code (running at ~6.67ns per line)
+          mov index,pr0          'Copy Hub RAM address of start of "lights" array to index variable
+          mov EndAddr,pr0        'Copy Hub RAM address of start of "lights" array to EndAddr variable
+          add EndAddr,#256       'Add 256 to EndAddr variable to get the last/end address of "lights" array
+Loop1     rdlong ledcolor,index  'Load new long of color data, output 24 bits to LED matrix
+          mov bit,#23            'Reset bit index pointer to 23
+Loop2     call #OutputBit        'Read and output bits 23 through 1
+          djnz bit, #Loop2       'Decrement bit index by 1, and if it is not zero, jump back up to "Loop2" line
+          call #OutputBit        'Read and output bit zero too
+
+          add index,#4           'Move on to next long of data (4 bytes) representing the next LED in the "lights" array
+          cmp index,EndAddr  wz  'Check to see if index has reached end address, write Z flag if it has
+    if_nz jmp #Loop1             'If index is not zero, jump back up to "Loop1" line
+
+OutputBit testb ledcolor,bit wz  'Test bit from color data long, set Z flag to bit's state
+          drvh pr1               'Drive output data pin High (start with pin on)
+    'If bit is High, send a One pulse signal (800ns High, 800ns Low)
+    if_z  waitx #238             'Wait for 800ns  (800ns/3.33ns=240, 240-2=238) (See WS2812B datasheet version 5)
+    if_z  drvl pr1               'Drive output data pin Low
+    if_z  waitx #238             'Wait for 800ns  (800ns/3.33ns=240, 240-2=238)
+    'If bit is Low, send a Zero pulse signal (200ns High, 800ns Low)
+    if_nz waitx #88              'Wait for 300ns  (300ns/3.33ns=90, 90-2=88)
+    if_nz drvl pr1               'Drive output data pin Low
+    if_nz waitx #238             'Wait for 800ns  (800ns/3.33ns=240, 240-2=238) (See WS2812B datasheet)
+          ret                    'Return from OutputBit subroutine
+
+index     long 0                 'Use as an index to specify LED number in the "lights" array matrix 0-63
+bit       long 0                 'Keeps track of which bit in the color data is being read and transmitted
+ledcolor  long 0                 'Stores an LED's color data from "lights" array in Hub RAM
+EndAddr   long 0                 'Stores the final Hub RAM address of "lights" array
+          end                    'End in-line assembly program
+
+pub led(LEDaddress,color)                            ''Changes the color of an LED at a specific address
+  lights[LEDaddress]:=color
+  Update()
+
+pub ledgrb(LEDaddress,_red,_green,_blue)             ''Changes RGB values of an LED at a specific address
+  lights[LEDaddress]:=_red<<16+_green<<8+_blue
+  Update()
+
+pub ledint(LEDaddress,color,intense)                 ''Changes the color of an LED at a specific address
+  lights[LEDaddress]:=((((color>>16)*intense)/255)<<16) +((((color>>8 & $FF)*intense)/255)<<8)+(((color & $FF)*intense)/255)
+  Update()
+
+pub intensity(color,intense) : newvalue              ''Changes the intensity (0-255) of a color
+  newvalue:=((((color>>16)*intense)/255)<<16) +((((color>>8 & $FF)*intense)/255)<<8)+(((color & $FF)*intense)/255)
+
+pub int(color,intense) : newvalue                    ''Changes the intensity (0-255) of a color
+  newvalue:=((((color>>16)*intense)/255)<<16) +((((color>>8 & $FF)*intense)/255)<<8)+(((color & $FF)*intense)/255)
+
+pub allset(setcolor) | i                             ''Changes the colors of all LEDs to the same color
+  longfill(@lights,setcolor,maxAddress+1)
+  Update()
+
+pub alloff() | i                                     ''Turns all of the LEDs off
+  longfill(@lights,0,maxAddress+1)
+  Update()
+  waitms(100)             'Can't send the next update too soon
+
+pub clear() | i                                      ''Turns all of the LEDs off
+  longfill(@lights,0,maxAddress+1)
+  Update()
+  waitms(100)             'Can't send the next update too soon
+
+pub section(AddressStart,AddressEnd,setcolor)        ''Changes colors in a section of LEDs to same color
+  longfill(@lights[AddressStart],setcolor,AddressEnd-AddressStart+1)'(@lights[AddressEnd]-@lights[AddressStart])/4)
+  Update()
+
+pub GetColor(address) : color                        ''Returns 24-bit RGB value from specified LED's address
+  color:=lights[address]
+
+pub random(address) | rand,_red,_green,_blue,timer   ''Sets LED at specified address to a random color
+  rand:=getrnd()
+  _red:=rand>>24
+  rand:=getrnd()
+  _green:=rand>>24
+  rand:=getrnd()
+  _blue:=rand>>24
+  lights[address]:=_red<<16+_green<<8+_blue
+  Update()
+
+pub randomcolor() : randcolor | rand,_red,_green,_blue,timer   ''Generates and returns a random color value
+  rand:=getrnd()
+  _red:=rand>>24
+  rand:=getrnd()
+  _green:=rand>>24
+  rand:=getrnd()
+  _blue:=rand>>24
+  randcolor:=_red<<16+_green<<8+_blue
+

@@ -4,14 +4,14 @@ con
   _clkfreq = 300_000_000
 
   {Absolute Encoder Constants}
-  CLK = 19
-  DATA = 18
-  CS0 = 5    ' Start of encoder chip select pin range
-  CSf = 17   ' End of encoder chip select pin range
+  CLK = 21
+  DATA = 22
+  CS0 = 8     ' Start of encoder chip select pin range
+  CSf = 20    ' End of encoder chip select pin range
   NumEnc = CSf - CS0 + 1
   MainArmEncPin = CSf
   MainArmEncIndex = CSf - CS0
-  AbsEncTolerance = 5 'In encoder counts
+  AbsEncTolerance = 3 ' In encoder counts
 
   {Quadrature Encoder Constants}
   ExtendEncBotPin = 2
@@ -24,147 +24,250 @@ con
   LSRetract = 29
 
   {Motor Constants}
-  StallThreshold = 1500
-  numBasePeriods = 1000 
+  StallThreshold = 1400
+  numBasePeriods = 1000
 
   {LED Constants}
-
-  
 
   {LCD Constants}
   ' Pins
   #0, JoyUp, JoyLeft, JoyRight, JoyDown, JoyButton
+  LCDRx = 0
 
 var
+  {
+    Hour to index:
+    1 - 0
+    .
+    .
+    .
+    12 - 11
+  }
   word EncCurPos[NumEnc]
-  word EncSetPoint[NumEnc] ' All initialized to 0?
+  word EncSetPoint[NumEnc] ' All initialized to 0 at runtime
   long Stack2[100], Stack3[100], Stack4[100], Stack5[100]
-  word hour, minute, second, day, date, month, year ' Does mean that they are consecutive in memory?
+  word time[7] ' hour, minute, second, day, date, month, year
+  word hour, minute, second, day, date, month, year ' Does this mean that they are consecutive in memory?
 
   long max_extension_count
   long extend_enc_count
 
-  word mainArmPos
-
-
 dat
-' where arm needs to be to reach a certain hourglass (starting and ending at 12) (stolen from old)
-hour_pos word 60, 1001, 923, 828, 747, 662, 571, 477, 402, 387, 192, 126, 60
+' where arm needs to be to reach a certain hourglass (starting at index 0, hour 1)
+hour_pos word 927, 836, 795, 687, 598, 517, 432, 346, 257, 176, 97, 1012
 
-' how far arm needs to extend to reach
-hour_extension long { ' definitely could be different depending on # enc counts
-} $0000
+' how far arm needs to extend to reach in quadrature encoder counts
+hour_extension long 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 
 obj
-
-  ' TODO: Find the spin2 versions of these
-  ' rgb : "WS2812B_RGB_LED_Driver"
   ' object parametrization requires spin v37
   DS3234 : "DS3234"       | SS=59, MOSI=58, MISO=57, SCLK=56, SQW=-1
   main_arm : "BTS7960"    | RPWM=24, LPWM=25, R_EN=2, L_EN=3, R_IS=4, L_IS=5, MinDuty=400 ' Currently enables are just to 5V
-  arm_extend : "DRV8801"  | DIR=31, PWM=30, BRAKE=2, SLEEP=3, FAULT=4, CS=5, MinDuty=0
-  arm_spin : "DRV8801"    | DIR=27, PWM=26, BRAKE=2, SLEEP=3, FAULT=4, CS=5, MinDuty=0
+  arm_extend : "DRV8801"  | DIR=31, PWM=30, BRAKE=2, SLEEP=3, FAULT=4, CS=61, MinDuty=0
+  arm_spin : "DRV8801"    | DIR=27, PWM=26, BRAKE=2, SLEEP=3, FAULT=4, CS=5, MinDuty=800
   pst : "pst_driver"
-  lcd : "serial_LCD" ' TODO: Find Spin2 Version
+  lcd : "jm_serial" ' TODO: ask Garner if this is the best thing to use
+  'rgb : "WS2812B"
 
-pub TestExtension()
+pub TestRotateHourglass() | i
+  main_arm.InitPins(10, 1000)
   arm_extend.InitPins(10, 1000)
   arm_spin.InitPins(10, 1000)
+
+  cogspin(2, ReadAbsEncoders(), @Stack2)
+  CalibrateExtension()
+  repeat i from 0 to 11
+    SetMainArmPos(hour_pos[i]) ' Or round(hour_i*.85.3)
+    Extend(1000)
+    ' Wait for arm to extend and then flip when it will be ~ flipped at 0
+    RotateHourglass(i, abs (512 - EncCurPos[i]) < AbsEncTolerance ? 0 : 512) ' Should swap between 0 and 512
+    Retract(1000)
+
+{{Read all absolute encoder positions via SPI into the EncCurPos list}}
+pub ReadAbsEncoders() | i, value
+  'pst.start(9600)
+  dira.[CLK]~~
+  outa.[CLK]~~
+  dira.[DATA]~
+  dira.[CSf..CS0]~~
+  outa.[CSf..CS0]~~
+  repeat
+    repeat i from CS0 to CSf
+      outa.[i]~ ' Chip Select
+      waitus(1) ' Propeller 2 fast 2 furious
+      outa.[CLK]~
+      waitus(1)
+      value:=0
+      repeat 16   ' Read 16 bits (top 10 are position)
+        outa.[CLK]~~
+        waitus(1)
+        value := (value << 1) | ina.[DATA]
+        outa.[CLK]~
+        waitus(1)
+      EncCurPos[i-CS0] := value >> 6
+      {
+      pst.dec(i-CS0+1)
+      pst.str(string(":"))
+      pst.dec(value>>6)
+      pst.NewLine()
+      }
+      outa.[CLK]~~
+      waitus(1)
+      outa.[i]~~
+      waitus(1)
+
+    'waitms(200)
+    'pst.ClearHome()
+
+pub LEDHandler()
+  ' Could be FSM?
+
+  ' Light up the hourglass corresponding to the current hour
+
+  ' When an hourglass is flipped, gradient (?)
+
+  ' Light up all the other ones
+
+  ' Arm LEDs?
+
+pub TestExtension()
   dira.[LSExtend]~
   dira.[LSRetract]~
-  arm_extend.DriveForward(1000)
-  waitms(2000)
-  arm_extend.Stop()
-  arm_spin.DriveForward(1000)
-  waitms(2200)
-  arm_spin.Stop()
+  cogspin(2, ReadAbsEncoders(), @Stack2)
+  waitms(1000)
+  arm_extend.InitPins(10,1000)
+  arm_spin.InitPins(10, 1000)
   Retract(1000)
+  arm_extend.DriveForward(1000)
+  waitms(4000)
+  arm_extend.Stop()
+  RotateHourglass(2, abs (512 - EncCurPos[2]) < AbsEncTolerance ? 0 : 512)
+  Retract(1000)
+
+
+pub Main() | hour_i, i, error
+  cogspin(2, ReadAbsEncoders(), @Stack2)    ' Process reading absolute encoders
+
+  arm_extend.InitPins(10, 1000)
+  CalibrateExtension() ' Setup quadrature encoder and get count range ; this is not in ReadQuadEncoder because we want to wait for this to occur before entering the main loop
+  cogspin(3, ReadQuadEncoder(), @Stack3)   ' Process reading quadrature encoder
+
+  DS3234.InitPins()
+  cogspin(4, ReadRTClock(), @Stack4)       ' Process reading the clock and handling LCD time setting
+
+  arm_spin.InitPins(10, 1000)
+  main_arm.InitPins(10, 1000)
+
+  repeat
+    ' if it's time to flip an hourglass (~20 seconds before multiple of 5 minutes)
+    if (minute +// 5) == 4 && second +>= 40
+      hour_i := minute/5 ' since this is not floating point divide, should round down (i.e. 4/5 = 0) so the indices should line up
+      SetMainArmPos(hour_pos[hour_i]) ' Or round((hour_i+1)*.85.3)
+      Extend(1000) ' Extend to mesh with gear ; Could start rotating first to ensure meshing
+      ' TODO: Wait for arm to extend and then flip when it will be ~ flipped at 0
+      RotateHourglass(hour_i, abs (512 - EncCurPos[hour_i]) < AbsEncTolerance ? 0 : 512) ' Should swap between 0 and 512
+      Retract(1000)
+    else ' otherwise use the arm to show the hour and maintain hourglass positions
+      repeat i from 0 to NumEnc-1 ' all absolute encoders other than main_arm
+        error := CalculateAbsError(EncCurPos[i], EncSetPoint[i]) ' Find the error between each hg setpoint and current position
+        if abs error > AbsEncTolerance ' an hourglass is out of position
+          SetMainArmPos(hour_pos[i]) ' Or round((hour_i+1)*.85.3)
+          RotateHourglass(i, EncSetPoint[i])
+          error := CalculateAbsError(EncCurPos[i], EncSetPoint[i])
+      SetMainArmPos(hour_pos[hour]) ' Or round(hour_i*85.3)
 
 
 {{Read clock and handle LCD}}
 pub ReadRTClock() | addr
   ' set joystick pins as inputs
-  dira.[JoyUp..JoyButton]~
+  dira.[JoyUp]~ ' Could do JoyUp..JoyButton, but if they aren't sequential that gets messy
+  dira.[JoyDown]~
+  dira.[JoyLeft]~
+  dira.[JoyRight]~
+  dira.[JoyButton]~
 
   repeat
     ' Read the time from the chip
     DS3234.GetTime()
     ' Convert it to usable numbers for our purposes and return
     second, minute, hour, day, date, month, year := DS3234.ConvertToReadable() ' Idk if this works
-    {
-    pst.dec(hour)
-    pst.str(string(":"))
-    if minute < 10
-      pst.dec(0)
-    pst.dec(minute) 'TODO: Needs to be 2 digits
-    pst.str(string(":"))
-    if second < 10
-      pst.dec(0)
-    pst.dec(second) 'TODO: Needs to be 2 digits
 
-    pst.str(string("    "))
-    case day
-      0:pst.str(string("Sunday"))
-      1:pst.str(string("Monday"))
-      2:pst.str(string("Tuesday"))
-      3:pst.str(string("Wednesday"))
-      4:pst.str(string("Thursday"))
-      5:pst.str(string("Friday"))
-      6:pst.str(string("Saturday"))
-      }
-    
     ' When the button on the joystick is pressed, editing begins
     if ina.[JoyButton] <> 0
-      ' may need to start and stop main cog? 
+      ' TODO: may need to start and stop main cog?
+      lcd.startx(LCDRx, LCDRx, 9600)
       ' Debounce button
       waitms(100)
-      ' Now entered editing mode
+      ' Now entered editing mode and will exit once button is pressed again
       addr := @hour
       repeat until ina.[JoyButton] <> 0
         ' Case statement?
-        
+
         ' Transition between fields (hour, minute, second)
         if ina.[JoyRight]
-          addr := addr + 16 ' Increment address 
-        else if ina.[JoyLeft]
+          addr := addr + 16 ' Increment address by 16 because they are words
+        elseif ina.[JoyLeft]
           addr := addr - 16 ' Decrement address
-        else if ina.[JoyUp]
+        elseif ina.[JoyUp]
           word[addr] := word[addr] + 1 ' Increment value
-        else if ina.[JoyDown]
+        elseif ina.[JoyDown]
           word[addr] := word[addr] - 1 ' Decrement value
-        
+
+        ' TODO: I hate this so much
         ' Limit either end
-        hour := 1 #> hour <# 12
-        minute := 0 #> minute <# 59
-        second := 0 #> second <# 59
-        day := 0 #> day <# 6
-        date := 1 #> date <# 31
-        month := 1 #> month <# 12
+        'hour := 1 #> hour <# 12
+        if hour > 12
+          hour := 1
+        elseif hour < 1
+          hour := 12
+        ' minute := 0 #> minute <# 59
+        if minute > 59
+          minute := 0
+        elseif minute < 0
+          minute := 59
+        'second := 0 #> second <# 59
+        if second > 59
+          second := 0
+        elseif second < 0
+          second := 59
+        ' day := 0 #> day <# 6
+        if day > 6
+          day := 0
+        elseif day < 0
+          day := 6
+        ' date := 1 #> date <# 31
+        if date > 31
+          date := 1
+        elseif date < 1
+          date := 31
+        ' month := 1 #> month <# 12
+        if month > 12
+          month := 1
+        elseif month < 1
+          month := 12
+        DS3234.SetTime(second, minute, hour, day, date, month, year) ' TODO: Incorporate the rest of the fields
 
-
-{{Displays time on LCD in readable format}}
-pub LCDDisplay()
-  repeat
-    lcd.dec(hour)
-    lcd.str(string(":"))
-    if minute < 10
-      lcd.dec(0)
-    lcd.dec(minute)
-    lcd.str(string(":"))
-    if second < 10
-      lcd.dec(0)
-    lcd.dec(second)
-    lcd.str(string("    "))
-    case day
-      0:lcd.str(string("Sunday"))
-      1:lcd.str(string("Monday"))
-      2:lcd.str(string("Tuesday"))
-      3:lcd.str(string("Wednesday"))
-      4:lcd.str(string("Thursday"))
-      5:lcd.str(string("Friday"))
-      6:lcd.str(string("Saturday"))
-
+        ' Update LCD display
+        ' TODO: may need to set position on lcd
+        lcd.dec(hour)
+        lcd.str(string(":"))
+        if minute < 10
+          lcd.dec(0)
+        lcd.dec(minute)
+        lcd.str(string(":"))
+        if second < 10
+          lcd.dec(0)
+        lcd.dec(second)
+        lcd.str(string("    "))
+        case day
+          0:lcd.str(string("Sunday"))
+          1:lcd.str(string("Monday"))
+          2:lcd.str(string("Tuesday"))
+          3:lcd.str(string("Wednesday"))
+          4:lcd.str(string("Thursday"))
+          5:lcd.str(string("Friday"))
+          6:lcd.str(string("Saturday"))
 
 {{Extends arm until it hits the limit switch}}
 pub Extend(speed)
@@ -183,78 +286,13 @@ pub Retract(speed)
   if ina.[LSRetract] <> 1
     ' Else drive the arm backward until LSRetract reads 1
     arm_extend.DriveBackward(speed)
-    repeat until ina.[LSRetract] == 1 || arm_extend.ReadCurrent() > StallThreshold
+    repeat until ina.[LSRetract] == 1 '|| arm_extend.ReadCurrent() > StallThreshold
   ' Stop
   arm_extend.Stop()
 
-pub ReadMainArmEncoder() | value
-  dira.[CLK]~~
-  dira.[DATA]~
-  dira.[MainArmEncPin]~~
-  outa.[MainArmEncPin]~~
-  repeat
-    outa.[MainArmEncPin]~
-    outa.[CLK]~
-    value:=0
-    repeat 16   ' Read 16 bits (top 10 are position)
-      outa.[CLK]~~
-      value := (value << 1) | ina.[DATA]
-      outa.[CLK]~
-    mainArmPos := (value >> 6)
-    outa.[CLK]~~
-    outa.[MainArmEncPin]~~
 
-pub Main() | hour_i, i, error
-  arm_extend.InitPins(10, 1000)
-  arm_spin.InitPins(10, 1000)
-  main_arm.InitPins(10, 1000)
-  DS3234.InitPins()
-
-  cogspin(2, ReadAbsEncoders(), @Stack2)    ' Process reading absolute encoders
-  cogspin(3, ReadQuadEncoder(), @Stack3)   ' Process reading quadrature encoders
-  cogspin(4, ReadRTClock(), @Stack4)        '
-  cogspin(5, LCDDisplay(), @Stack5)
-
-  repeat
-    ' if it's time to flip an hourglass (~20 seconds before multiple of 5 minutes)
-    if (minute +// 5) == 4 && second +>= 40
-      hour_i := ((minute+1)+//60)/5 ' Maybe a sketchy scheme
-      SetMainArmPos(hour_pos[hour_i]) ' Or round(hour_i*.85.3)
-      Extend(1000)
-      ' Wait for arm to extend and then flip when it will be ~ flipped at 0
-      
-      RotateHourglass(hour_i, abs (512 - EncCurPos[hour_i]) < AbsEncTolerance ? 0 : 512) ' Should swap between 0 and 512
-      Retract(1000)
-    else ' otherwise show the hour and maintain hourglass positions
-      repeat i from 0 to NumEnc-1 ' all absolute encoders other than main_arm
-        error := CalculateAbsError(EncCurPos[i], EncSetPoint[i])
-        if abs error > AbsEncTolerance ' an hourglass is out of pos
-          SetMainArmPos(hour_pos[i]) ' Or round(hour_i*.85.3)
-          RotateHourglass(i, EncSetPoint[i])
-          error := CalculateAbsError(EncCurPos[i], EncSetPoint[i])
-      SetMainArmPos(hour_pos[hour]) ' Or round((hour-1)*85.3)
-
-
-pub ReadAbsEncoders() | i, value
-  dira.[CLK]~~
-  dira.[DATA]~
-  dira.[CS0..CSf]~~
-  outa.[CS0..CSf]~~
-  repeat
-    repeat i from CS0 to CSf
-      outa.[i]~
-      outa.[CLK]~
-      value:=0
-      repeat 16   ' Read 16 bits (top 10 are position)
-        outa.[CLK]~~
-        value := (value << 1) | ina.[DATA]
-        outa.[CLK]~
-      EncCurPos[i-CS0] := value >> 6
-      outa.[CLK]~~
-      outa.[i]~~
-
-
-pub ReadQuadEncoder() | temp
+{{Set up limit switches as inputs and determine maximum encoder counts}}
+pub CalibrateExtension() | temp
   dira.[LSExtend]~
   dira.[LSRetract]~
 
@@ -271,10 +309,14 @@ pub ReadQuadEncoder() | temp
 
   ' Return to 0
   Retract(1000)
+
+{{Solely constantly updates the quadrature encoder count}}
+pub ReadQuadEncoder()
   repeat
     extend_enc_count := rdpin(ExtendEncBotPin)
 
 
+{{Calculates and returns the direction (positive or negative) and distance from the current absolute encoder count to the target}}
 pub CalculateAbsError(current, target) : error
   error := target - current
   ' Theoretically handles wraparound
@@ -284,9 +326,9 @@ pub CalculateAbsError(current, target) : error
     else
       error:=error-1024
 
-' These are different functions because control algorithms might need to be tuned differently
 
-pub SetMainArmPos(enc_pos) | error
+{{Rotates the main arm to absolute encoder position given by enc_pos}}
+pub SetMainArmPos(enc_pos) | error ' TODO: Limit to 0-1023
   error := CalculateAbsError(EncCurPos[MainArmEncIndex], enc_pos)
   repeat while abs error > AbsEncTolerance
     main_arm.Drive(error*numBasePeriods/1024)
@@ -294,14 +336,7 @@ pub SetMainArmPos(enc_pos) | error
   main_arm.Stop()
 
 
-pub SetMainArmPos2(enc_pos) | error
-  error := CalculateAbsError(mainArmPos, enc_pos)
-  repeat while abs error > AbsEncTolerance
-    main_arm.Drive(error*numBasePeriods/1024)
-    error := CalculateAbsError(mainArmPos, enc_pos)
-  main_arm.Stop()
-
-
+{{Extends the arm to a quadrature encoder count given by enc_pos}}
 pub ExtendArm(enc_pos) | error
   error := enc_pos - extend_enc_count
   repeat while abs error > QuadEncTolerance
@@ -310,10 +345,11 @@ pub ExtendArm(enc_pos) | error
   arm_extend.Stop()
 
 
-pub RotateHourglass(hr, enc_pos) | error
-  EncSetPoint[hr] := enc_pos 
-  error := CalculateAbsError(EncCurPos[hr], enc_pos)
+{{Rotate the hourglass indicated by hr_i (0-11 where 0=1 and 11=12) to an absolute encoder position given by enc_pos}}
+pub RotateHourglass(hr_i, enc_pos) | error
+  EncSetPoint[hr_i] := enc_pos
+  error := CalculateAbsError(EncCurPos[hr_i], enc_pos)
   repeat while abs error > AbsEncTolerance
     arm_spin.Drive(error*numBasePeriods/1024)
-    error := CalculateAbsError(EncCurPos[hr], enc_pos)
+    error := CalculateAbsError(EncCurPos[hr_i], enc_pos)
   arm_spin.Stop()

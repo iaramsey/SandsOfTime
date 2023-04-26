@@ -29,7 +29,6 @@ pub InitPins(numClockPulses, numBasePeriods) | x
   x.word[1] := numBasePeriods   'Set PMW frame period to be made up of 1000 base periods
   clockPulses := numClockPulses
   basePeriods := numBasePeriods
-  minDutyPeriods := PercentageToBasePeriods(MinDuty)
   pinstart(PWM, p_oe+p_pwm_triangle, x, 0) 'Start PWM smartpin
 
   ' May want to provide optional NC
@@ -41,9 +40,6 @@ pub InitPins(numClockPulses, numBasePeriods) | x
   ' Set up CS pin as ADC to check voltage output indicating current draw
   analog.start(CS, 0, 1400) ' max current of 2.8 A 
 
-{{Helper method that converts a percentage to a number of periods wrt the number of base periods}}
-pri PercentageToBasePeriods(percentage) : periods
-  periods := percentage * basePeriods / 100
 
 {{Drive motor forward (positive speed) or backward (negative speed) with speed 0-numBasePeriods}}
 pub Drive(speed)
