@@ -31,8 +31,14 @@ con
 
   {LCD Constants}
   ' Pins
-  #0, JoyUp, JoyLeft, JoyRight, JoyDown, JoyButton
-  LCDRx = 0
+  '#0, JoyUp, JoyLeft, JoyRight, JoyDown, JoyButton
+  LCDRx = 31
+  JoyUp = 30
+  JoyRight = 29
+  JoyDown = 28
+  JoyLeft = 27
+  JoyButton = 26
+
 
 var
   {
@@ -147,6 +153,15 @@ pub TestExtension()
 
 
 pub Main() | hour_i, i, error
+
+  lcd.startx(LCDRx, LCDRx, 9600)
+  waitms(100)
+  lcd.tx(2)
+  lcd.str(string("Sunday"))
+
+
+  ReadRTClock()
+  {
   cogspin(2, ReadAbsEncoders(), @Stack2)    ' Process reading absolute encoders
 
   arm_extend.InitPins(10, 1000)
@@ -176,6 +191,8 @@ pub Main() | hour_i, i, error
           RotateHourglass(i, EncSetPoint[i])
           error := CalculateAbsError(EncCurPos[i], EncSetPoint[i])
       SetMainArmPos(hour_pos[hour]) ' Or round(hour_i*85.3)
+      }
+
 
 
 {{Read clock and handle LCD}}
@@ -186,17 +203,22 @@ pub ReadRTClock() | addr
   dira.[JoyLeft]~
   dira.[JoyRight]~
   dira.[JoyButton]~
+  lcd.startx(LCDRx, LCDRx, 9600)
+  lcd.str(string("Sunday"))
 
   repeat
     ' Read the time from the chip
-    DS3234.GetTime()
+    ' DS3234.GetTime()
     ' Convert it to usable numbers for our purposes and return
-    second, minute, hour, day, date, month, year := DS3234.ConvertToReadable() ' Idk if this works
+    ' second, minute, hour, day, date, month, year := DS3234.ConvertToReadable() ' Idk if this works
+      second, minute, hour, day, date, month, year := 0,0,0,0,0,0,0
+
 
     ' When the button on the joystick is pressed, editing begins
     if ina.[JoyButton] <> 0
       ' TODO: may need to start and stop main cog?
       lcd.startx(LCDRx, LCDRx, 9600)
+
       ' Debounce button
       waitms(100)
       ' Now entered editing mode and will exit once button is pressed again
@@ -246,7 +268,7 @@ pub ReadRTClock() | addr
           month := 1
         elseif month < 1
           month := 12
-        DS3234.SetTime(second, minute, hour, day, date, month, year) ' TODO: Incorporate the rest of the fields
+        ' DS3234.SetTime(second, minute, hour, day, date, month, year) ' TODO: Incorporate the rest of the fields
 
         ' Update LCD display
         ' TODO: may need to set position on lcd
