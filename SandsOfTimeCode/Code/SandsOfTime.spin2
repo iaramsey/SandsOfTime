@@ -68,7 +68,7 @@ obj
   arm_spin : "DRV8801"    | DIR=27, PWM=26, BRAKE=2, SLEEP=3, FAULT=4, CS=5, MinDuty=800
   pst : "pst_driver"
   lcd : "jm_serial" ' TODO: ask Garner if this is the best thing to use
-  'rgb : "WS2812B"
+  rgb : "WS2812B"
 
 pub TestRotateHourglass() | i
   main_arm.InitPins(10, 1000)
@@ -347,9 +347,14 @@ pub ExtendArm(enc_pos) | error
 
 {{Rotate the hourglass indicated by hr_i (0-11 where 0=1 and 11=12) to an absolute encoder position given by enc_pos}}
 pub RotateHourglass(hr_i, enc_pos) | error
+  rgb.pr1 := hr_i
+  rbg.intensity(white, 50)
+  rgb.alloff()
+  rgb.allset(white)
   EncSetPoint[hr_i] := enc_pos
   error := CalculateAbsError(EncCurPos[hr_i], enc_pos)
   repeat while abs error > AbsEncTolerance
     arm_spin.Drive(error*numBasePeriods/1024)
     error := CalculateAbsError(EncCurPos[hr_i], enc_pos)
   arm_spin.Stop()
+  rgb.alloff()
