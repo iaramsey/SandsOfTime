@@ -39,7 +39,7 @@ con
 
 var
   {
-    Hour to index:
+    Hour to index: ' TODO: THIS MIGHT CHANGE
     1 - 0
     .
     .
@@ -346,6 +346,7 @@ pub CalibrateExtension() | temp
 {{Solely constantly updates the quadrature encoder count}}
 pub ReadExtensionEncoder()
   repeat
+    ' TODO: zero on limit switch
     extend_enc_count := rdpin(ExtendEncBotPin)
 
 
@@ -362,7 +363,7 @@ pub CalculateAbsError(current, target) : error
 
 {{Rotates the main arm to absolute encoder position given by enc_pos}}
 pub SetMainArmPos(enc_pos) | error ' TODO: optimize to understand it is a circle
-  error := enc_pos- arm_enc_count
+  error := enc_pos - arm_enc_count
   repeat while abs error > AbsEncTolerance
     main_arm.Drive(error*numBasePeriods/4096)
     error := enc_pos - arm_enc_count
