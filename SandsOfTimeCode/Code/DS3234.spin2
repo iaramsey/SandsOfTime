@@ -23,37 +23,37 @@ var
 
 '*** SPI Helper functions ***
 
-pri SPIStart() '
-  outa.[SS]~
+pri SPIStart()
+  pinl(SS)
 
 pri SPIEnd()
-  outa.[SS]~~
+  pinh(SS)
 
 {{Read 1 byte via SPI into variable left shifted in; x should be address}}
 pri SPIRead(x) | i
   repeat 8
-    outa.[SCLK]~~
-    byte[x] := byte[x]<<1 | ina.[MISO]  ' Sends MSB first
-    outa.[SCLK]~
-
+    pinh(SCLK)
+    byte[x] := byte[x]<<1 | pinr(MISO)  ' Sends MSB first
+    pinl(SCLK)
 
 {{Write 1 byte via SPI}}
 pri SPIWrite(value) | i
   repeat i from 7 to 0
-    outa.[SCLK]~~
-    outa.[MOSI]:= value>>i & 1
-    outa.[SCLK]~
+    pinh(SCLK)
+    pinw(MOSI, value>>i & 1)
+    pinl(SCLK)
 
 '*** Clock Functions ***
 
 pub InitPins()
-  dira.[SS]~~
-  dira.[MISO]~
-  dira.[MOSI]~~
-  dira.[SCLK]~~
-  outa.[SS]~~
+  dirh(SS)
+  dirl(MISO)
+  dirh(MOSI)
+  dirh(SCLK)
+  pinh(SS)
+  
   if SQW <> -1
-    dira.[SQW]~
+    dirl(SQW)
 
 {{Gets raw time data from registers seconds through year $00-$06}}
 pub GetTime()  | i      ''Refresh time[0] through time[6] values

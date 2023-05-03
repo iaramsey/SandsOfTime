@@ -25,25 +25,25 @@ pub InitPins(numClockPulses, numBasePeriods) | x
   pinstart(RPWM, p_oe+p_pwm_triangle, x, 0)
   pinstart(LPWM, p_oe+p_pwm_triangle, x, 0)
 
-  dira.[R_EN]~~
-  outa.[R_EN]~
-  dira.[L_EN]~~
-  outa.[L_EN]~
+  dirh(R_EN)
+  pinl(R_EN)
+  dirh(L_EN)
+  pinl(L_EN)
 
   if R_IS <> -1
-    dira.[R_IS]~
+    dirl(R_IS)
   if L_IS <> -1
-    dira.[L_IS]~
+    dirl(L_IS)
 
 pub DriveForward(speed)
-  outa.[L_EN]~~
-  outa.[R_EN]~~
+  pinh(L_EN)
+  pinh(R_EN)
   wypin(LPWM,0)
   wypin(RPWM, MinDuty#>speed<#basePeriods) ' TODO: Maybe incorporate a minimum duty cycle
 
 pub DriveBackward(speed)
-  outa.[R_EN]~~
-  outa.[L_EN]~~
+  pinh(R_EN)
+  pinh(L_EN)
   wypin(RPWM,0)
   wypin(LPWM, MinDuty#>speed<#basePeriods)
 
@@ -64,9 +64,9 @@ pub DriveDirection(speed, direction) ' any value other than 0 drives backwards
 {{Disable motor and set PWM to 0% duty cycle}}
 pub Stop()
   ' Disable
-  outa.[R_EN]~
-  outa.[L_EN]~
-
+  pinl(R_EN)
+  pinl(L_EN)
+  
   ' Turn off PWM
   wypin(RPWM, 0)
   wypin(LPWM, 0)
