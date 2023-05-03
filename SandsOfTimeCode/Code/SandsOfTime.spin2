@@ -4,24 +4,27 @@ con
   _clkfreq = 300_000_000
 
   {Absolute Encoder Constants}
-  CLK = 21
-  DATA = 22
   CS0 = 8     ' Start of encoder chip select pin range
   CSf = 20    ' End of encoder chip select pin range
   NumEnc = CSf - CS0 + 1
-  MainArmEncPin = CSf
-  MainArmEncIndex = CSf - CS0
+  CLK = 21
+  DATA = 22
   AbsEncTolerance = 3 ' In encoder counts
 
   {Quadrature Encoder Constants}
   ExtendEncBotPin = 2
   ExtendEncTopPin = 2
 
+  ArmEncTopPin = 2
+  ArmEncBotPin = 2
+
   QuadEncTolerance = 10
 
   {Limit Switch Constants}
   LSExtend = 28
   LSRetract = 29
+
+  IndSensor = 0
 
   {Motor Constants}
   StallThreshold = 1400
@@ -49,12 +52,14 @@ var
   word time[7] ' hour, minute, second, day, date, month, year
   word hour, minute, second, day, date, month, year ' Does this mean that they are consecutive in memory?
 
+  long arm_enc_count
+
   long max_extension_count
   long extend_enc_count
 
 dat
 ' where arm needs to be to reach a certain hourglass (starting at index 0, hour 1)
-hour_pos word 927, 836, 795, 687, 598, 517, 432, 346, 257, 176, 97, 1012
+hour_pos word 7416, 6688, 6360, 5496, 4784, 4136, 3456, 2768, 2056, 1408, 776, 8096
 
 ' how far arm needs to extend to reach in quadrature encoder counts
 hour_extension long 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
@@ -72,6 +77,8 @@ obj
 
 pub TestRotateHourglass() | i
   main_arm.InitPins(10, 1000)
+  CalibrateMainArm()
+  cogspin(3, ReadMainArmEncoder())
   arm_extend.InitPins(10, 1000)
   arm_spin.InitPins(10, 1000)
 
@@ -149,15 +156,19 @@ pub TestExtension()
 pub Main() | hour_i, i, error
   cogspin(2, ReadAbsEncoders(), @Stack2)    ' Process reading absolute encoders
 
+  main_arm.InitPins(10, 1000) ' these could happen in the start of these cogs?
+  CalibrateMainArm()
+  cogspin(3, ReadMainArmEncoder(), @Stack3)
+
   arm_extend.InitPins(10, 1000)
   CalibrateExtension() ' Setup quadrature encoder and get count range ; this is not in ReadQuadEncoder because we want to wait for this to occur before entering the main loop
-  cogspin(3, ReadQuadEncoder(), @Stack3)   ' Process reading quadrature encoder
+  cogspin(4, ReadExtensionEncoder(), @Stack4)   ' Process reading quadrature encoder
 
   DS3234.InitPins()
-  cogspin(4, ReadRTClock(), @Stack4)       ' Process reading the clock and handling LCD time setting
+  cogspin(5, ReadRTClock(), @Stack5)       ' Process reading the clock and handling LCD time setting
 
   arm_spin.InitPins(10, 1000)
-  main_arm.InitPins(10, 1000)
+  
 
   repeat
     ' if it's time to flip an hourglass (~20 seconds before multiple of 5 minutes)
@@ -177,6 +188,28 @@ pub Main() | hour_i, i, error
           error := CalculateAbsError(EncCurPos[i], EncSetPoint[i])
       SetMainArmPos(hour_pos[hour]) ' Or round(hour_i*85.3)
 
+
+pub CalibrateMainArm() | temp
+  dira.[IndSensor]~ ' Inverted logic
+
+  if ina.[IndSensor] == 1
+    ' Drive until it hits the induction sensor
+    main_arm.DriveForward(700)
+    repeat until ina.[IndSensor] == 0
+    main_arm.Stop()
+
+  ' Start the quadrature encoder
+  temp := (ArmEncTopPin - ArmEncBotPin) & %1111
+  pinstart(ArmEncBotPin, p_quadrature + %0000<<28 + temp<<24, 0, 0)
+  ' Could start the cog here?
+
+pub ReadMainArmEncoder()
+  repeat
+    if ina.[IndSensor]==0
+      arm_enc_count:=0
+      dira.[ArmEncBotPin]~ ' Should reset the count on the pin 
+      dira.[ArmEncBotPin]~~
+    arm_enc_count := rdpin(ArmEncBotPin)
 
 {{Read clock and handle LCD}}
 pub ReadRTClock() | addr
@@ -311,7 +344,7 @@ pub CalibrateExtension() | temp
   Retract(1000)
 
 {{Solely constantly updates the quadrature encoder count}}
-pub ReadQuadEncoder()
+pub ReadExtensionEncoder()
   repeat
     extend_enc_count := rdpin(ExtendEncBotPin)
 
@@ -328,11 +361,11 @@ pub CalculateAbsError(current, target) : error
 
 
 {{Rotates the main arm to absolute encoder position given by enc_pos}}
-pub SetMainArmPos(enc_pos) | error ' TODO: Limit to 0-1023
-  error := CalculateAbsError(EncCurPos[MainArmEncIndex], enc_pos)
+pub SetMainArmPos(enc_pos) | error ' TODO: optimize to understand it is a circle
+  error := enc_pos- arm_enc_count
   repeat while abs error > AbsEncTolerance
-    main_arm.Drive(error*numBasePeriods/1024)
-    error := CalculateAbsError(EncCurPos[MainArmEncIndex], enc_pos)
+    main_arm.Drive(error*numBasePeriods/4096)
+    error := enc_pos - arm_enc_count
   main_arm.Stop()
 
 
