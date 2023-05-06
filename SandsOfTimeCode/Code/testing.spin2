@@ -1,0 +1,42 @@
+con
+  _clkfreq = 300_000_000
+
+
+obj
+  'arm_spin : "DRV8801" | DIR=44, PWM=43, BRAKE=46, SLEEP=45, FAULT=-1, CS=-1, MinDuty=800
+  arm_extend : "DRV8801"  | DIR=40, PWM=39, BRAKE=42, SLEEP=41, FAULT=-1, CS=-1, MinDuty=0 ' Currently CS not on the board
+
+pub main() | x
+
+  x.word[0] := 10     'Set base period's # of clock pulses 10*3.33ns=33ns
+  x.word[1] := 1000   'Set PMW frame period to be made up of 1000 base periods
+  pinstart(39, p_oe+p_pwm_triangle, x, 0) 'Start PWM smartpin
+
+  dirb.[42-32]~~
+  outb.[42-32]~
+
+  dirb.[41-32]~~
+  outb.[41-32]~~
+
+  dirb.[40-32]~~
+  outb.[40-32]~~
+
+  wypin(39, 1000)
+  repeat
+
+pub testobj()
+  'arm_spin.InitPins(10, 1000)
+  arm_extend.InitPins(10, 1000)
+
+  arm_extend.DriveBackward(1000)
+  waitms(3000)
+  arm_extend.Stop()
+  'arm_spin.DriveBackward(1000)
+  'waitms(2000)
+  'arm_spin.Stop()
+  arm_extend.DriveForward(1000)
+  waitms(3000)
+  arm_extend.Stop()
+
+  repeat
+
