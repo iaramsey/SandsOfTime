@@ -1,8 +1,6 @@
 {BTS7960 H-Bridge Library}
 {https://www.handsontec.com/dataspecs/module/BTS7960%20Motor%20Driver.pdf}
 con
-  _clkfreq = 300_000_000
-
   ' Pin assignments
   RPWM = 1  ' Forward Level or PWM signal, Active High
   LPWM = 2  ' Reverse Level or PWM signal, Active High
@@ -12,9 +10,12 @@ con
   L_IS = -1  ' Reverse Drive, Side current alarm output
 
   MinDuty = 0
+  ' TODO: Maybe implement MaxDuty
 
 var
   long clockPulses, basePeriods
+
+pub null() ' Not a top level object
 
 pub InitPins(numClockPulses, numBasePeriods) | x
   x.word[0] := numClockPulses   'Set base period's # of clock pulses 10*3.33ns=33ns
@@ -25,15 +26,15 @@ pub InitPins(numClockPulses, numBasePeriods) | x
   pinstart(RPWM, p_oe+p_pwm_triangle, x, 0)
   pinstart(LPWM, p_oe+p_pwm_triangle, x, 0)
 
-  dirh(R_EN)
+  dirhigh(R_EN)
   pinl(R_EN)
-  dirh(L_EN)
+  dirhigh(L_EN)
   pinl(L_EN)
 
   if R_IS <> -1
-    dirl(R_IS)
+    dirlow(R_IS)
   if L_IS <> -1
-    dirl(L_IS)
+    dirlow(L_IS)
 
 pub DriveForward(speed)
   pinh(L_EN)
@@ -66,9 +67,21 @@ pub Stop()
   ' Disable
   pinl(R_EN)
   pinl(L_EN)
-  
+
   ' Turn off PWM
   wypin(RPWM, 0)
   wypin(LPWM, 0)
 
 ' TODO: Implement alarm outputs
+
+pri dirhigh(pin)
+  if pin > 31
+    dirb.[pin-32]~~
+  else
+    dira.[pin]~~
+
+pri dirlow(pin)
+  if pin > 31
+    dirb.[pin-32]~
+  else
+    dira.[pin]~

@@ -1,0 +1,1976 @@
+{Test All Subsystems}
+
+
+CON
+  _clkfreq = 300_000_000                                                  'Standard clock frequency = 160 MHz
+
+  {Absolute Encoder Constants}
+  CS0 = 1    ' Start of encoder chip select pin range
+  CSf = 12    ' End of encoder chip select pin range
+  NumEnc = CSf - CS0 + 1
+  CLK = 0
+  DATA = 13
+  AbsEncTolerance = 15 ' In encoder counts
+  IndSensor = 36
+  ArmEncTopPin = 33
+  ArmEncBotPin = 32
+  QuadEncTolerance = 5
+  {Quadrature Encoder Constants}
+  ExtendEncBotPin = 34
+  ExtendEncTopPin = 35
+
+  {Limit Switch Constants}
+  LSExtend = 37
+  LSRetract = 38
+
+  numClockPulses = 10
+  numBasePeriods = 1000
+
+  ExtensionSpeed = 1000
+
+  MainArmSpeed = 350
+
+
+
+VAR
+  long Stack2[100], Stack3[100], Stack4[100], Stack5[100]
+  long max_extend_pos
+  word EncCurPos[NumEnc+1] ' Zero is a dummy so that index corresponds to hour
+  word EncSetPoint[NumEnc+1] ' Zero is a dummy so that index corresponds to hour
+  byte homed
+  long mainarm_pos
+  long key
+  byte active_ring
+
+OBJ
+  arm_extend : "DRV8801"  | DIR=40, PWM=39, BRAKE=42, SLEEP=41, FAULT=-1, CS=-1, MinDuty=0 ' Currently CS not on the board
+  arm_spin : "DRV8801"    | DIR=44, PWM=43, BRAKE=46, SLEEP=45, FAULT=-1, CS=-1, MinDuty=800
+  main_arm : "BTS7960"    | RPWM=31, LPWM=30, R_EN=29, L_EN=28, R_IS=27, L_IS=26, MinDuty=MainArmSpeed ' Currently enables are just to 5V
+  pst : "pst_driver"
+
+
+
+pub TestAllPositions() | i, hour, minute, new_pos
+  pr0:=@lights                 'Store Hub RAM address of start of "lights" array as pr0 (which PASM can read)
+  pr1:=48
+  cogspin(4, spin_all_but_active(blue, 30), @Stack4)
+  pinstart(ExtendEncBotPin, p_quadrature + %0000<<28 + %0001<<24, 0, 0)
+  cogspin(2, ReadAbsEncoders(), @Stack2)
+  main_arm.InitPins(numClockPulses, numBasePeriods)
+  arm_spin.InitPins(numClockPulses, numBasePeriods)
+  arm_extend.InitPins(numClockPulses, numBasePeriods)
+  Retract()
+  homed:=0
+  cogspin(3, ReadMainArmEncoder(), @Stack3)
+  repeat until homed == 1
+  waitms(500)
+  SetMainArmPos(0)
+  active_ring := 12
+
+  'cogspin(5, FiveMinAnimation(active_ring), @Stack5)
+  waitms(2000)
+  hour := 8
+  minute:=2
+  SetMainArmPos(hour_pos[minute])
+  arm_spin.DriveForward(750)
+  case EncCurPos[minute]
+    0..(0+AbsEncTolerance): new_pos := 512
+    (1023-AbsEncTolerance)..1023: new_pos := 512
+    (512-AbsEncTolerance)..(512+AbsEncTolerance): new_pos := 0
+    other: new_pos:=255
+  ExtendArm(hour_extension[minute])
+  RotateHourglass(minute, new_pos)
+  active_ring := minute
+  'cogstop(5)
+  cogspin(5, FiveMinAnimation(active_ring), @Stack5)
+  Retract()
+  SetMainArmPos(hour_pos[8])
+  repeat
+
+
+  {
+  repeat
+    repeat i from 1 to 12
+      waitms(2000)
+      SetMainArmPos(hour_pos[i])
+      arm_spin.DriveForward(750)
+      ExtendArm(hour_extension[i])
+      waitms(1000)
+      arm_spin.Stop()
+
+      'RotateHourglass(i, abs (512 - EncCurPos[i]) < AbsEncTolerance ? 0 : 512)
+      'active_ring := i
+      cogstop(5)
+      cogspin(5, FiveMinuteAnimation(active_ring), @Stack5)
+      Retract()
+  }
+
+pub ReadAbsEncoders() | i, value
+  'pst.start(9600)
+  dirhigh(CLK)
+  pinh(CLK)
+  dirlow(DATA)
+  repeat i from CS0 to CSf
+    dirhigh(i)
+    pinh(i)
+  ' dirh(CSF..CS0) ' TODO
+  'pinh(CSf..CS0)
+  repeat
+    repeat i from CS0 to CSf
+      pinl(i) ' Chip Select
+      waitus(1) ' Propeller 2 fast 2 furious
+      pinl(CLK)
+      waitus(1)
+      value:=0
+      repeat 16   ' Read 16 bits (top 10 are position)
+        pinh(CLK)
+        waitus(1)
+        value := (value << 1) | pinr(DATA)
+        pinl(CLK)
+        waitus(1)
+      EncCurPos[i-CS0+1] := value >> 6
+      {pst.dec(i-CS0+1)
+      pst.str(string(": "))
+      pst.dec(value >> 6)
+      pst.NewLine()}
+      pinh(CLK)
+      waitus(1)
+      pinh(i)
+      waitus(1)
+    'waitms(200)
+    'pst.ClearHome()
+
+{{Extends the arm to a quadrature encoder count given by enc_pos}}
+pub ExtendArm(enc_pos) | error
+  error := enc_pos - rdpin(ExtendEncBotPin)
+  repeat while abs error > QuadEncTolerance
+    if error < 0
+      arm_extend.Drive(-1000) ' TODO: Find good Kp
+    else
+      arm_extend.Drive(1000)
+    error := enc_pos - rdpin(ExtendEncBotPin)
+  arm_extend.Stop()
+
+
+pub Retract()
+  ' Drive the arm backward until LSRetract reads 1
+  arm_extend.DriveBackward(1000)
+  waitms(500)
+  repeat until pinr(LSRetract) == 1
+  arm_extend.Stop()
+  dirlow(ExtendEncBotPin) ' Should reset the count on the pin
+  dirhigh(ExtendEncBotPin)
+
+
+pub Extend()
+  ' Drive the arm forward until LSExtend reads 1
+  arm_extend.DriveForward(1000)
+  waitms(500)
+  repeat until pinr(LSExtend) == 1
+  arm_extend.Stop()
+
+
+{{Calculates and returns the direction (positive or negative) and distance from the current absolute encoder count to the target}}
+pub CalculateAbsError(current, target) : error
+  error := target - current
+  ' Theoretically handles wraparound
+  if abs error > 512
+    if error < 0
+      error:=error+1024
+    else
+      error:=error-1024
+
+{{Rotate the hourglass indicated by hr_i (0-11 where 0=1 and 11=12) to an absolute encoder position given by enc_pos}}
+pub RotateHourglass(hr_i, enc_pos) | error
+  EncSetPoint[hr_i] := enc_pos
+
+  'error := CalculateAbsError(EncCurPos[hr_i], enc_pos)
+  error := enc_pos - EncCurPos[hr_i]
+  repeat while abs error > AbsEncTolerance
+    arm_spin.Drive(500)
+    'arm_spin.Drive(error*numBasePeriods/1024)
+    error := enc_pos - EncCurPos[hr_i]
+    'error := CalculateAbsError(EncCurPos[hr_i], enc_pos)
+  arm_spin.Stop()
+
+{{Home the main arm and then constantly read the encoder}}
+pub ReadMainArmEncoder()
+  dirlow(IndSensor) ' Inverted logic
+  main_arm.InitPins(numClockPulses, numBasePeriods)
+  ' Home main arm
+  if pinr(IndSensor) <> 0
+    ' Drive until it hits the induction sensor
+    main_arm.DriveBackward(800)
+    repeat until pinr(IndSensor) == 0
+    main_arm.Stop()
+  ' Start the quadrature encoder
+  pinstart(ArmEncBotPin, p_quadrature + %0000<<28 + %0001<<24, 0, 0)
+  homed:=1
+  ' could find max counts
+  repeat
+    if pinr(IndSensor)==0
+      mainarm_pos:=0
+      dirlow(ArmEncBotPin) ' Should reset the count on the pin
+      dirhigh(ArmEncBotPin)
+    'mainarm_pos := rdpin(ArmEncBotPin)
+    'waitms(50)
+    debug(`mainArm '`(mainarm_pos)' 10)
+
+{{Rotates the main arm to absolute encoder position given by enc_pos}}
+pub SetMainArmPos(enc_pos) | error, Kp, delta_t ' TODO: optimize to understand it is a circle
+  Kp := 2
+  delta_t := 5 'ms
+  error := rdpin(ArmEncBotPin) - enc_pos
+  repeat while abs error > QuadEncTolerance
+    if error > 0
+      Kp := 10
+    else
+      Kp := 2
+    main_arm.Drive(Kp*error*numBasePeriods/8192)
+    waitms(delta_t)
+    error := rdpin(ArmEncBotPin) - enc_pos
+  main_arm.Stop()
+
+{Pin Helper Methods}
+pri dirhigh(pin) ' TODO: Make these do pin ranges
+  if pin > 31
+    dirb.[pin-32]~~
+  else
+    dira.[pin]~~
+
+pri dirlow(pin)
+  if pin > 31
+    dirb.[pin-32]~
+  else
+    dira.[pin]~
+
+dat
+' where arm needs to be to reach a certain hourglass (starting and ending at hour 12)
+'             12   1     2     3     4     5     6     7     8     9    10    11 12
+hour_pos long 0, 780, 1370, 2040, 2627, 3295, 4074, 4740, 5376, 6094, 6797, 7608, 0
+
+
+' how far arm needs to extend to reach in quadrature encoder counts (starting and ending at hour 12)
+hour_extension long 6984, 7240, 6975, 6834, 6758, 6864, 6614, 6716, 6937, 6892, 6723, 7050, 6984
+
+dat
+con
+
+  maxaddress = 1_196             'For an 8x8 array, LEDs are addressed from 0-63 (increase this value if using arrays or strips with more LEDs)
+
+ 'Predefined colors                               green      red      blue
+  off            = 0                            '%00000000_00000000_00000000
+  red            = 255<<8                       '%00000000_11111111_00000000
+  green          = 255<<16                      '%11111111_00000000_00000000
+  blue           = 255                          '%00000000_00000000_11111111
+  white          = 255<<16+255<<8+255           '%11111111_11111111_11111111
+  cyan           = 255<<16+255                  '%11111111_00000000_11111111
+  magenta        = 255<<8+255                   '%00000000_11111111_11111111
+  yellow         = 255<<16+255<<8               '%11111111_11111111_00000000
+  chartreuse     = 255<<16+127<<8               '%11111111_01111111_00000000
+  orange         = 165<<16+255<<8               '%10100101_11111111_11010100
+  aquamarine     = 255<<16+127<<8+212           '%11111111_01111111_11010100
+  pink           = 192<<16+255<<8+203           '%11000000_11111111_11001011
+  turquoise      = 224<<16+64<<8+192            '%11100000_01000000_11000000
+  realwhite      = 255<<16+200<<8+255           '%11111111_11001000_11111111
+  indigo         = 75<<8+130                    '%00000000_01001011_10000010
+  violet         = 130<<16+238<<8+238           '%10000010_11101110_11101110
+
+var
+  long lights[1_196]     'Create an array of 1,196 longs to hold the color values of each LED in 92*13=1196
+
+pub FiveMinAnimation(ring) | waitbetween
+
+  pr0:=@lights                 'Store Hub RAM address of start of "lights" array as pr0 (which PASM can read)
+  pr1:=48                      'Specify first output pin as pr1 (which PASM can read), in this case, Pin 47 will be the first output and
+  waitbetween:=200             '23077 for 5 min timer
+  repeat
+    'allset(intensity(blue,30))
+    'waitms(100)
+    setcustom(ring,@Frame1)
+    waitms(waitbetween)
+    setcustom(ring,@Frame2)
+    waitms(waitbetween)
+    setcustom(ring,@Frame3)
+    waitms(waitbetween)
+    setcustom(ring,@Frame4)
+    waitms(waitbetween)
+    setcustom(ring,@Frame5)
+    waitms(waitbetween)
+    setcustom(ring,@Frame6)
+    waitms(waitbetween)
+    setcustom(ring,@Frame7)
+    waitms(waitbetween)
+    setcustom(ring,@Frame8)
+    waitms(waitbetween)
+    setcustom(ring,@Frame9)
+    waitms(waitbetween)
+    setcustom(ring,@Frame10)
+    waitms(waitbetween)
+    setcustom(ring,@Frame11)
+    waitms(waitbetween)
+    setcustom(ring,@Frame12)
+    waitms(waitbetween)
+    setcustom(ring,@Frame13)
+    waitms(waitbetween)
+    setcustom(ring,@Frame14)
+
+pub RGB_LED_Demo2() | i,j,x
+
+  pr0:=@lights                 'Store Hub RAM address of start of "lights" array as pr0 (which PASM can read)
+  pr1:=48                      'Specify first output pin as pr1 (which PASM can read), in this case, Pin 47 will be the first output and
+
+repeat
+  setcustomtest(@Frame1)
+  waitms(200)
+  setcustomtest(@Frame2)
+  waitms(200)
+  setcustomtest(@Frame3)
+  waitms(200)
+  setcustomtest(@Frame4)
+  waitms(200)
+  setcustomtest(@Frame5)
+  waitms(200)
+  setcustomtest(@Frame6)
+  waitms(200)
+  setcustomtest(@Frame7)
+  waitms(200)
+  setcustomtest(@Frame8)
+  waitms(200)
+  setcustomtest(@Frame9)
+  waitms(200)
+  setcustomtest(@Frame10)
+  waitms(200)
+  setcustomtest(@Frame11)
+  waitms(200)
+  setcustomtest(@Frame12)
+  waitms(200)
+  setcustomtest(@Frame13)
+  waitms(200)
+  setcustomtest(@Frame14)
+  waitms(200)
+
+pub Update() 'General-purpose Registers Used: pr0=address of "lights" variable, pr1=pin (these are passed to PASM from the Spin2 code)
+  pinl((pr1+12)..pr1)            'Send Low reset signal to WS2812B LEDs
+  waitus(300)                    'Reset signal width is 300us
+
+          org                    'Jump into inline Propeller 2 Assembly Code (running at ~6.67ns per line)
+          mov counter,#0         'Reset counter to 0
+          mov outputpin,pr1      'Start with 1st output pin
+          mov index,pr0          'Copy Hub RAM address of start of "lights" array to index variable
+          mov EndAddr,pr0        'Copy Hub RAM address of start of "lights" array to EndAddr variable
+Loop0     add EndAddr,#368       'Add 92 to EndAddr variable to get the last/end address of this section of the "lights" array
+
+Loop1     rdlong ledcolor,index  'Load new long of color data, output 24 bits to LED matrix
+          mov bit,#23            'Reset bit index pointer to 23
+Loop2     call #OutputBit        'Read and output bits 23 through 1
+          djnz bit, #Loop2       'Decrement bit index by 1, and if it is not zero, jump back up to "Loop2" line
+          call #OutputBit        'Read and output the last bit (bit zero) as well
+
+          add index,#4           'Move on to next long of data (4 bytes) representing the next LED in the "lights" array
+          cmp index,EndAddr  wz  'Check to see if index has reached end address, write Z flag if it has
+    if_nz jmp #Loop1             'If index is not zero, jump back up to "Loop1" line to grab another long of LED data
+
+          add counter,#1         'Add one to the counter
+          add outputpin,#1       'Add one to the output pin (stepping up from Pins 47-59)
+          cmp counter,#12  wz    'Check to see if counter has reached 12, write Z flag if it has
+    if_nz jmp #Loop0
+
+OutputBit testb ledcolor,bit wz  'Test bit from color data long, set Z flag to bit's state
+          drvh outputpin               'Drive output data pin High (start with pin on)
+    'If bit is High, send a One pulse signal (800ns High, 800ns Low)
+    if_z  waitx #238             'Wait for 800ns  (800ns/3.33ns=240, 240-2=238) (See WS2812B datasheet version 5)
+    if_z  drvl outputpin              'Drive output data pin Low
+    if_z  waitx #238             'Wait for 800ns  (800ns/3.33ns=240, 240-2=238)
+    'If bit is Low, send a Zero pulse signal (200ns High, 800ns Low)
+    if_nz waitx #88              'Wait for 300ns  (300ns/3.33ns=90, 90-2=88)
+    if_nz drvl outputpin               'Drive output data pin Low
+    if_nz waitx #238             'Wait for 800ns  (800ns/3.33ns=240, 240-2=238) (See WS2812B datasheet)
+          ret                    'Return from OutputBit subroutine
+
+counter   long 0                 'Use to store the counter value that counts which section of lights are being worked with
+index     long 0                 'Use as an index to specify LED number in the "lights" array matrix 0-63
+outputpin long 0                 'Keeps track of the output pin
+bit       long 0                 'Keeps track of which bit in the color data is being read and transmitted
+ledcolor  long 0                 'Stores an LED's color data from "lights" array in Hub RAM
+StartAddr long 0                 'Stores the starting Hub RAM address of "lights" array (for a set of 93 lights)
+EndAddr   long 0                 'Stores the final Hub RAM address of "lights" array (for a set of 93 lights)
+          end                    'End in-line assembly program
+
+
+pub led(ring,LEDaddress,color)                            ''Changes the color of an LED at a specific address
+  lights[(ring*92)+LEDaddress]:=color
+  'Update()
+
+{pub led(LEDaddress,color)                            ''Changes the color of an LED at a specific address
+  lights[LEDaddress]:=color
+  Update()
+}
+pub ledgrb(ring,LEDaddress,_green,_red,_blue)             ''Changes GRB values of an LED at a specific address
+  lights[(ring*92)+LEDaddress]:=_green<<16+_red<<8+_blue
+  Update()
+
+pub ledrgb(ring,LEDaddress,_red,_green,_blue)             ''Changes RGB values of an LED at a specific address
+  lights[(ring*92)+LEDaddress]:=_green<<16+_red<<8+_blue
+  Update()
+
+pub ledint(ring,LEDaddress,color,intense)                 ''Changes the color of an LED at a specific address
+  lights[(ring*92)+LEDaddress]:=((((color>>16)*intense)/255)<<16) +((((color>>8 & $FF)*intense)/255)<<8)+(((color & $FF)*intense)/255)
+  Update()
+
+pub intensity(color,intense) : newvalue              ''Changes the intensity (0-255) of a color
+  newvalue:=((((color>>16)*intense)/255)<<16) +((((color>>8 & $FF)*intense)/255)<<8)+(((color & $FF)*intense)/255)
+
+pub int(color,intense) : newvalue                    ''Changes the intensity (0-255) of a color
+  newvalue:=((((color>>16)*intense)/255)<<16) +((((color>>8 & $FF)*intense)/255)<<8)+(((color & $FF)*intense)/255)
+
+pub allset(setcolor) | i                             ''Changes the colors of all LEDs to the same color
+  longfill(@lights,setcolor,maxAddress+1)
+  Update()
+
+pub alloff() | i                                     ''Turns all of the LEDs off
+  longfill(@lights,0,maxAddress+1)
+  Update()
+  waitms(100)             'Can't send the next update too soon
+
+pub clear() | i                                      ''Turns all of the LEDs off
+  longfill(@lights,0,maxAddress+1)
+  Update()
+  waitms(100)             'Can't send the next update too soon
+
+pub section(ring,AddressStart,AddressEnd,setcolor)        ''Changes colors in a section of LEDs to same color
+  longfill(@lights[ring*92+AddressStart],setcolor,AddressEnd-AddressStart+1)'(@lights[AddressEnd]-@lights[AddressStart])/4)
+  Update()
+
+{pub GetColor(address) : color                        ''Returns 24-bit RGB value from specified LED's address
+  color:=lights[address]
+}
+pub random(address) | rand,_red,_green,_blue,timer   ''Sets LED at specified address to a random color
+  rand:=getrnd()
+  _red:=rand>>24
+  rand:=getrnd()
+  _green:=rand>>24
+  rand:=getrnd()
+  _blue:=rand>>24
+  lights[address]:=_green<<16+_red<<8+_blue
+  Update()
+
+pub randomcolor() : randcolor | rand,_red,_green,_blue,timer   ''Generates and returns a random color value
+  rand:=getrnd()
+  _red:=rand>>24
+  rand:=getrnd()
+  _green:=rand>>24
+  rand:=getrnd()
+  _blue:=rand>>24
+  randcolor:=_green<<16+_red<<8+_blue
+
+pub spin_bounce(ring,color,power) | i,j,k
+
+  repeat i from 0 to 91
+    repeat k from 0 to i
+      led(ring,i,int(color,power))
+    update()
+    waitus(5)
+
+  repeat j from 0 to 91
+    led(ring,j,0)
+    update()
+    waitus(5)
+
+  repeat k from 0 to 2
+    section(ring,0,91,int(color,power))
+    update()
+    waitms(250)
+    section(ring,0,91,0)
+    update()
+    waitms(250)
+  section(ring,0,91,int(color,power))
+
+pub spin_all_but_active(color,power) | ring,i,j,k
+  pr0:=@lights                 'Store Hub RAM address of start of "lights" array as pr0 (which PASM can read)
+  pr1:=48
+  repeat
+    repeat j from 0 to 91
+      repeat ring from 0 to 11
+        if ring == active_ring-1
+          next
+        repeat k from 0 to j
+          led(ring,k,int(color,power))
+      update()
+    repeat ring from 0 to 11
+      if ring == active_ring-1
+        next
+      repeat j from 0 to 91
+        led(ring,j,0)
+      update()
+      waitus(5)
+      update()
+
+pub spin_all_but_active_random(power) | ring,i,j,k
+  pr0:=@lights                 'Store Hub RAM address of start of "lights" array as pr0 (which PASM can read)
+  pr1:=48
+  {longfill(@lights,int(blue,30),1_196)
+  Update()
+  repeat}
+  repeat
+
+    repeat j from 0 to 91
+      repeat ring from 0 to 11
+        if ring == active_ring-1
+          next
+        repeat k from 0 to j
+          led(ring,k,int(randomcolor(),power))
+      update()
+    repeat ring from 0 to 11
+      if ring == active_ring-1
+        next
+      repeat j from 0 to 91
+        led(ring,j,0)
+      update()
+      waitus(5)
+      update()
+
+pub spin_all(color,power) | ring,i,j,k
+
+
+  repeat j from 0 to 91
+    repeat ring from 0 to 11
+      repeat k from 0 to j
+        led(ring,k,int(color,power))
+    update()
+
+  repeat ring from 0 to 11
+     repeat j from 0 to 91
+       led(ring,j,0)
+    update()
+    waitus(5)
+    update()
+
+pub spin_down(ring,color)| i
+
+  section(ring,0,91,int(color,125))
+  repeat i from 0 to 91
+    led(ring,i,0)
+    waitus(3260869)
+
+pub setcustom(ring,customdata)
+
+  longmove(@lights[(ring-1)*92], customdata, 92)
+  'update()
+
+pub setcustomtest(customdata) | ring
+
+  repeat ring from 0 to 11
+    longmove(@lights[ring*92], customdata, 92)
+  update()
+
+dat
+testcolors long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame1 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame2 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame3 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame4 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame5 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame6 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame7 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame8 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110
+
+Frame9 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000
+
+Frame10 long {
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000
+
+Frame11 long {
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000
+
+Frame12 long {
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000
+
+Frame13 long {
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00000000_00000000_00011110,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000
+
+Frame14 long {
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000,{
+}%00001101_00011010_00000000

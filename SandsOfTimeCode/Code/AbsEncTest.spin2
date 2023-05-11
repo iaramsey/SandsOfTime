@@ -4,9 +4,9 @@
 CON
   _clkfreq = 300_000_000                                                  'Standard clock frequency = 160 MHz
 
-  CLK = 19
-  DATA = 18
-  MainArmEncPin = 17
+  CLK = 0
+  DATA = 13
+  EncPin = 1
 
 obj
 
@@ -15,11 +15,11 @@ obj
 pub ReadEncoder() | value
   dira.[CLK]~~
   dira.[DATA]~
-  dira.[MainArmEncPin]~~
-  outa.[MainArmEncPin]~~
+  dira.[EncPin]~~
+  outa.[EncPin]~~
   pst.start(9600)
   repeat
-    outa.[MainArmEncPin]~
+    outa.[EncPin]~
     outa.[CLK]~
     value:=0
     repeat 16   ' Read 16 bits (top 10 are position)
@@ -29,4 +29,6 @@ pub ReadEncoder() | value
     pst.dec(value >> 6)
     pst.NewLine()
     outa.[CLK]~~
-    outa.[MainArmEncPin]~~
+    outa.[EncPin]~~
+    waitms(200)
+    pst.ClearHome()

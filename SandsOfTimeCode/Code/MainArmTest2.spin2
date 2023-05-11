@@ -1,0 +1,101 @@
+con
+  _clkfreq = 300_000_000
+
+  numClockPulses = 10
+  numBasePeriods = 1000
+
+  IndSensor = 36
+  ArmEncTopPin = 33
+  ArmEncBotPin = 32
+  QuadEncTolerance = 5
+
+obj
+  main_arm : "BTS7960"    | RPWM=31, LPWM=30, R_EN=29, L_EN=28, R_IS=27, L_IS=26, MinDuty=400 ' Currently enables are just to 5V
+
+var
+  long Stack3[100]
+  long mainarm_pos
+  byte homed
+
+dat
+' where arm needs to be to reach a certain hourglass (starting at index 0, hour 1)
+hour_pos word 0, 776, 1408, 2056, 2768, 3456, 4136, 4784, 5496, 6360, 6688, 7416, 0
+
+pub Main() | i
+  main_arm.InitPins(numClockPulses, numBasePeriods)
+  main_arm.DriveBackward(400)
+  waitms(1000)
+  main_arm.Stop()
+  homed:=0
+  cogspin(3, ReadMainArmEncoder(), @Stack3)
+  repeat until homed==1
+  waitms(500)
+  SetMainArmPos(0)
+  debug("Starting positions")
+  'waitms(2000)
+  {repeat
+    repeat i from 0 to 11
+      SetMainArmPos(hour_pos[i])
+      waitms(2000)
+      'Extend()
+      'RotateHourglass(hour_i, abs (512 - EncCurPos[hour_i]) < AbsEncTolerance ? 0 : 512) ' Should swap between 0 and 512
+      'Retract()}
+
+{{Home the main arm and then constantly read the encoder}}
+pub ReadMainArmEncoder()
+
+  ' Initial Rough Homing Sequence
+  dirlow(IndSensor) ' Inverted logic
+  main_arm.InitPins(numClockPulses, numBasePeriods)
+  ' Home main arm
+  if pinr(IndSensor) <> 0
+    ' Drive until it hits the induction sensor
+    main_arm.DriveBackward(800)
+    repeat until pinr(IndSensor) == 0
+    main_arm.Stop()
+  'mainarm_pos:=0
+  ' Start the quadrature encoder
+  pinstart(ArmEncBotPin, p_quadrature + %0000<<28 + %0001<<24, 0, 0)
+  homed:=1
+  ' Homing done. Begin constantly reading
+  repeat
+    if pinr(IndSensor)==0
+      mainarm_pos:=0
+      dirlow(ArmEncBotPin) ' Should reset the count on the pin
+      dirhigh(ArmEncBotPin)
+    mainarm_pos := rdpin(ArmEncBotPin)
+    debug(`mainArm '`(mainarm_pos)' 10)
+
+{{Rotates the main arm to absolute encoder position given by enc_pos}}
+pub SetMainArmPos(enc_pos) | error, Kp, delta_t ' TODO: optimize to understand it is a circle
+  Kp := 2
+  delta_t := 5 'ms
+  error := mainarm_pos - enc_pos
+  if abs error > 4096
+    if error < 0
+      error:=error+4096
+    else
+      error:=error-4096
+  repeat while abs error > QuadEncTolerance
+    main_arm.Drive(Kp*error*numBasePeriods/8192)
+    waitms(delta_t)
+    error := mainarm_pos - enc_pos
+    if abs error > 4096
+      if error < 0
+        error:=error+4096
+      else
+        error:=error-4096
+  main_arm.Stop()
+
+{Pin Helper Methods}
+pri dirhigh(pin) ' TODO: Make these do pin ranges
+  if pin > 31
+    dirb.[pin-32]~~
+  else
+    dira.[pin]~~
+
+pri dirlow(pin)
+  if pin > 31
+    dirb.[pin-32]~
+  else
+    dira.[pin]~

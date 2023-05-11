@@ -1,0 +1,71 @@
+{Object_Title_and_Purpose}
+
+
+CON
+  _clkfreq = 300_000_000
+
+  {Absolute Encoder Constants}
+  CS0 = 1    ' Start of encoder chip select pin range
+  CSf = 12    ' End of encoder chip select pin range
+  NumEnc = CSf - CS0 + 1
+  CLK = 0
+  DATA = 13
+  AbsEncTolerance = 3 ' In encoder counts
+
+
+VAR
+  word EncCurPos[NumEnc]
+  word EncSetPoint[NumEnc] ' All initialized to 0 at runtime
+
+obj
+  pst : "pst_driver"
+
+{{Read all absolute encoder positions via SPI into the EncCurPos list}}
+pub ReadAbsEncoders() | i, value
+  pst.start(9600)
+  dirhigh(CLK)
+  pinh(CLK)
+  dirlow(DATA)
+  repeat i from CS0 to CSf
+    dirhigh(i)
+    pinh(i)
+  ' dirh(CSF..CS0) ' TODO
+  'pinh(CSf..CS0)
+  repeat
+    repeat i from CS0 to CSf
+      pinl(i) ' Chip Select
+      waitus(1) ' Propeller 2 fast 2 furious
+      pinl(CLK)
+      waitus(1)
+      value:=0
+      repeat 16   ' Read 16 bits (top 10 are position)
+        pinh(CLK)
+        waitus(1)
+        value := (value << 1) | pinr(DATA)
+        pinl(CLK)
+        waitus(1)
+      EncCurPos[i-CS0] := value >> 6
+      pst.dec(i-CS0+1)
+      pst.str(string(": "))
+      pst.dec(value >> 6)
+      pst.NewLine()
+      pinh(CLK)
+      waitus(1)
+      pinh(i)
+      waitus(1)
+    waitms(200)
+    pst.ClearHome()
+
+
+{Pin Helper Methods}
+pri dirhigh(pin)
+  if pin > 31
+    dirb.[pin-32]~~
+  else
+    dira.[pin]~~
+
+pri dirlow(pin)
+  if pin > 31
+    dirb.[pin-32]~
+  else
+    dira.[pin]~
